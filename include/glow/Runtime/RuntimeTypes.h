@@ -38,7 +38,7 @@ using DeviceIDTy = size_t;
 using RunIdentifierTy = size_t;
 
 /// Map of DeviceIDTy -> DeviceManager.
-using DeviceManagerMapTy = std::map<DeviceIDTy, std::unique_ptr<DeviceManager>>;
+using DeviceManagerMapTy = std::map<DeviceIDTy, std::shared_ptr<DeviceManager>>;
 
 /// Callback type used by HostManager and DeviceManager, used to pass results of
 /// an inference request back to the caller.

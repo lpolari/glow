@@ -148,6 +148,8 @@ class Partitioner final : public PartitionerBase {
   /// returns the first one.
   const DeviceInfo &getDeviceInfoForBackend(llvm::StringRef backendName);
 
+  void dumpPartitionConfig(PartitionConfig partitionConfig);
+
 public:
   /// \p parent is the module which contains the functions need to be divided.
   /// Here we assume that all the functions in one module belong to a same
@@ -202,6 +204,14 @@ public:
   /// users.
   Expected<DAGListTy> loadBalancedPartition(CompilationContext &cctx,
                                             size_t numDevices = 0);
+
+  /// This partition approach creates #period subnets. The period is given
+  /// as part of the compilation context. The load (in terms of runtime)
+  /// is balanced between all subnets. The layer runtime estimation is
+  /// based on sample measurements in the layer-runtime-measurements database
+  /// given in the data repository. The code is partly copied from the
+  /// loadBalancedPartition-Function
+  Expected<DAGListTy> timeslotBalancedPartiton(CompilationContext &cctx);
 
   // This partition approach is meant for SparseNN models. The SLS tables are
   // split across logical devices and the non-SLS nodes are assigned in a

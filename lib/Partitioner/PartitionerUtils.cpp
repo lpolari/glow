@@ -16,9 +16,13 @@
 
 #include "glow/Partitioner/PartitionerUtils.h"
 #include "glow/Partitioner/PartitionerTypes.h"
+#include "nlohmann/json.hpp"
+#include <fstream>
+#include <sqlite3.h>
 #include <unordered_set>
 
 using llvm::isa;
+using json = nlohmann::json;
 
 namespace glow {
 
@@ -184,6 +188,39 @@ uint64_t getNodeMemUsage(const Node *node) {
     }
   }
   return size;
+}
+
+
+int getEstimatedNodeComputeTime(const Node *node, llvm::StringRef name,
+                                const BackendInfo &backendInfo){
+  sqlite3 *db;
+  int rc;
+
+  std::string net_name = name.substr(0, name.size()-7);
+  rc = sqlite3_open("../data/layer-runtime-measurements.db", &db);
+
+  /* Query for median duration of layer (node) */
+  int duration_median = -1;
+  std::stringstream query_stream;
+  query_stream << "SELECT duration FROM traces WHERE network_name==\""
+               << net_name << "\" AND node_name==\""
+               << std::string(node->getName())
+               << "\" ORDER BY duration LIMIT 1 OFFSET (SELECT count(*) "
+               << "FROM traces WHERE node_name==\""
+               <<  std::string(node->getName())
+               << "\" AND network_name==\""
+               << net_name << "\")/2";
+
+  auto query_string_string = query_stream.str();
+
+  sqlite3_exec(db , query_string_string.c_str(), [](void *arg,
+                                       int count, char **data,
+                                       char **columns) -> int{
+    int* run_id = (int*) arg;
+    *run_id = atoi(*data) + 1;
+  }, (void*) &duration_median, NULL);
+  sqlite3_close(db);
+  return duration_median;
 }
 
 float getNodeComputeTime(const Node *node, const BackendInfo &backendInfo) {

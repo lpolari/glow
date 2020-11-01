@@ -154,6 +154,10 @@ struct CompilationContext {
   /// Configuration for different precision modes.
   PrecisionConfiguration precisionConfig;
 
+  //  period of the network. Used for timeslot load balanced partitioning
+  //  which splits the network in #period subnets
+  unsigned period;
+
   /// How to annotate the compilation log filename.
   std::string compilationLogPrefix{"glow"};
 

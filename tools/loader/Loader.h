@@ -113,6 +113,11 @@ public:
   /// compile process is destructive on the original function and module.
   Module *getModule() { return F_->getParent(); }
 
+  /// Getter for the Module. This moves the ownership of the module to
+  /// the callee
+  std::unique_ptr<Module> getUniqueModule() { return std::move(M_); }
+
+
   /// Getter for the Caffe2 network file name.
   llvm::StringRef getCaffe2NetDescFilename() { return caffe2NetDescFilename_; }
 

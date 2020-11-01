@@ -20,13 +20,19 @@
 #include "glow/Partitioner/PartitionerUtils.h"
 #include "glow/Partitioner/PartitionerValidation.h"
 #include "glow/Support/Support.h"
+#include "nlohmann/json.hpp"
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <fstream>
+
+using json = nlohmann::json;
+
 namespace glow {
 bool GlowEnableLoadBalancedPartitioning = false;
+bool GlowEnableTimeslotBalancedPartiton = true;
+
 bool GlowLogPartition = false;
 static llvm::cl::opt<bool, /* ExternalStorage */ true>
     GlowEnableLoadBalancedPartitioningOpt(
@@ -35,6 +41,14 @@ static llvm::cl::opt<bool, /* ExternalStorage */ true>
             "Enable a partitioner pass to optimize for "
             "load balance in addition to memory capacity constraints"),
         llvm::cl::location(GlowEnableLoadBalancedPartitioning));
+
+static llvm::cl::opt<bool, /* ExternalStorage */ true>
+    GlowEnableTimeslotBalancedPartitonOpt(
+    "glow_partitioner_enable_timeslot_balance",
+    llvm::cl::desc(
+        "Enable a partitioner pass to optimize for "
+        "timeslot balance"),
+    llvm::cl::location(GlowEnableTimeslotBalancedPartiton));
 } // namespace glow
 
 /// -log-partition - Command line option to dump Partitioner logs.
@@ -451,6 +465,227 @@ Expected<DAGListTy> Partitioner::createDAGWithoutPartition(
 
   return std::move(partitions);
 }
+
+
+Expected<DAGListTy> Partitioner::timeslotBalancedPartiton(
+    CompilationContext &cctx) {
+
+  PartitionConfig partitionConfig;
+
+  unsigned period = cctx.period;
+  if (module_->getFunctions().size() != 1) {
+    return MAKE_ERR(
+        ErrorValue::ErrorCode::PARTITIONER_ERROR,
+        strFormat("Invalid : %lu functions in a module. Now in load-balanced "
+                  "partition flow, the module can only contain 1 function",
+                  module_->getFunctions().size()));
+  }
+
+  if (multiBackendNames_) {
+    VLOG(1) << "For multi backend types, load-balanced partition can't be "
+               "applied. Call heterogeneous partition instead.";
+    return heterogeneousPartition(cctx);
+  }
+  F_ = selectRepFunc(module_, memSize_);
+  std::string origName(F_->getName().data());
+  DAGListTy partitions;
+  std::vector<Backend *> backends;
+  genBackendMap(backendMap_, backendHolder_, backends);
+
+  // Step 1: Get the minial number of partitions from auto-partition.
+  auto backendName = backends[0]->getBackendName();
+  uint64_t availableMemory = backendMap_[backendName].memSize;
+  if (!optimized_) {
+    RETURN_IF_ERR(::glow::optimizeFunction(F_, *(backends[0]), cctx));
+  }
+  NodeToFunctionMap partitionMap;
+  float totalEstimatedTime = 0;
+  for (auto &n : F_->getNodes()) {
+    totalEstimatedTime +=
+        getEstimatedNodeComputeTime(&n, F_->getName(),
+                                    backendMap_[deviceInfo_[0].backendName]);
+  }
+  LOG(INFO) << "Estimated time :: " << totalEstimatedTime;
+
+  partitionConfig.funcName = origName;
+  std::vector<std::string> backendNames(period,
+                                        backends[0]->getBackendName());
+  partitionConfig.backendNames = backendNames;
+  partitionConfig.numOfPartitions = period;
+
+  // Use same Partitioning approach as for load balanced partitioning
+  std::vector<float> deviceTime(period, 0);
+  std::vector<size_t> memoryAvailable(period, availableMemory);
+  std::vector<NodesSet> nodesInPartitions(period);
+  std::vector<GraphMemInfo> graphMem(period, GraphMemInfo{});
+  std::vector<Function *> partitionFuncs(period);
+
+  // Devide entire time through the period of the network
+  float timePerPartition = totalEstimatedTime / period;
+  LOG(INFO) << "Estimated time per Partition :: " << timePerPartition;
+
+  // Get the BFS levels
+  Function *newF;
+  BFSLevel bfs = getBFSLevel(F_);
+  size_t level = bfs.size();
+
+  std::vector<std::string> partitionNames;
+
+  // Create the functions and push them into the mapping
+  for (DeviceIDTy curPartition = 0; curPartition < period; curPartition++) {
+    std::string funcName = std::string(F_->getName()) + "_part"
+                           + std::to_string(curPartition + 1);
+    if (F_->getParent()->hasFunction(funcName)) {
+      newF = F_->getParent()->getFunction(funcName);
+      F_->getParent()->eraseFunction(newF);
+    }
+    newF = F_->getParent()->createFunction(funcName);
+    partitionMap.createPartition(newF, backendName);
+    partitionMap.appendLogicalDeviceID(newF, curPartition);
+    partitionFuncs[curPartition] = newF;
+
+    partitionNames.push_back(funcName);
+  }
+
+  partitionConfig.partitionNames = partitionNames;
+
+  llvm::StringMap<size_t> nodeToPartition;
+
+  // Go through operators level by level
+  for (int i = level - 1; i >= 0; i--) {
+    for (size_t j = 0, e = bfs[i].size(); j < e; j++) {
+      Node *N = bfs[i][j];
+
+      // Find the maximum partition id of the inputs to the node
+      DeviceIDTy maxLogicalDeviceId = 0;
+      for (auto &I : getInputs(N)) {
+        Function *inpF = partitionMap[I];
+        auto logicalDeviceIds = partitionMap.getLogicalDeviceIDList(inpF);
+        DCHECK(logicalDeviceIds.size() == 1);
+        auto logicalDeviceId = logicalDeviceIds[0];
+        if (logicalDeviceId > maxLogicalDeviceId) {
+          maxLogicalDeviceId = logicalDeviceId;
+        }
+      }
+
+      auto curOpTime =
+          getEstimatedNodeComputeTime(N ,F_->getName(),
+                                      backendMap_[deviceInfo_[0].backendName]);
+      auto curOpMemory = getNodeMemUsage(N);
+
+      // Find a partition to put this node into
+      DeviceIDTy curPartition = maxLogicalDeviceId;
+      const float allowedLoadImbalanceFraction = 0.5f;
+      for (; curPartition < period; curPartition++) {
+        // Put the op in current partition if
+        // (a) memory constaints and load balance constraints are not violated,
+        // or (b) this is the last partition and memory capacity isnt exceeded
+        // The allowedLoadImbalanceFraction in the load balance case is to avoid
+        // edge cases where load balance is only violated by a small amount and
+        // moving to the next partition would result in significant imbalance in
+        // runtime. Hence if the violation is by less than
+        // allowedLoadImbalanceFraction of the operator cost, then we prefer to
+        // keep it in the current partition.
+        bool loadBalanceValid = deviceTime[curPartition] +
+                                curOpTime * allowedLoadImbalanceFraction <
+                                timePerPartition;
+        bool memValid = memoryAvailable[curPartition] >= curOpMemory;
+
+        if (memValid && (loadBalanceValid || curPartition == period - 1)) {
+          // valid, put the node in the current partition
+          Function *curF = partitionFuncs[curPartition];
+          partitionMap.add(N, curF);
+          nodeToPartition.insert(std::pair<llvm::StringRef, size_t>(N->getName(),
+                                                                    curPartition));
+          LOG(INFO) << "\tPartition :: " << curPartition
+                    << "// Name :: " << std::string(N->getName())
+                    << " // Time :: " << curOpTime << "\n";
+          deviceTime[curPartition] += curOpTime;
+
+          memoryAvailable[curPartition] -= curOpMemory;
+          graphMem[curPartition] = updateGraphMemInfoByAddingNode(
+              nodesInPartitions[curPartition], graphMem[curPartition], N);
+          nodesInPartitions[curPartition].insert(N);
+          partitionMap.setGraphMemInfo(curF, graphMem[curPartition]);
+          break;
+        }
+      }
+
+      LOG(INFO) << "\t-------- DEVICE TIME UPDATE --------";
+      for (auto &time : deviceTime){
+        LOG(INFO) << "\tDevice time :: " << time << "\n";
+      }
+
+      partitionConfig.nodeToPartition = nodeToPartition;
+
+      // Throw error if we were not able to put this node into any partition
+      if (curPartition >= period) {
+        logPartitionInfo(partitionMap);
+        return MAKE_ERR(ErrorValue::ErrorCode::PARTITIONER_ERROR,
+                        "Load balance partition error");
+      }
+    }
+  }
+  for (size_t i = 0; i < period; i++) {
+    VLOG(1) << "Partition #" << i
+            << " has estimated runtime " << deviceTime[i];
+  }
+  // Check if the memory usage meets the device memory limitation.
+  RETURN_IF_ERR(memoryUsageValidation(partitionMap, backendMap_));
+
+  // assignLogicalDeviceID adds all partitions to their logical device, clear
+  // the existing first to prevent duplication.
+  partitionMap.clearLogicalDeviceID();
+  logicalDeviceID_ = assignSameLogicalDeviceToAllSubnets(partitionMap, backendMap_);
+  RETURN_IF_ERR(logicalDevicesValidation(partitionMap, backendMap_));
+
+  partitions =
+      doPartitioning(origName, {F_}, module_, partitionMap, /* saveDAG */ true,
+                     cctx.backendOpts.backendSpecificNodeInfo);
+  module_->eraseFunction(F_);
+
+  RETURN_IF_ERR(finalize(partitions, partitionMap));
+
+
+  std::vector<unsigned> logicalIDsPerDevice(1, 0);
+  std::vector<std::vector<unsigned>> logicalIDs(period, logicalIDsPerDevice);
+  partitionConfig.logicalIDs = logicalIDs;
+  //BackendHints bh1;
+  partitionConfig.backendHints = {};
+  /// The logical IDs to assign to the partitions.
+
+  dumpPartitionConfig(partitionConfig);
+
+  return std::move(partitions);
+}
+
+void Partitioner::dumpPartitionConfig(PartitionConfig partitionConfig){
+
+  json jf;
+  jf["funcname"] = partitionConfig.funcName;
+  jf["numOfPartitions"] = partitionConfig.numOfPartitions;
+  jf["partitionNames"] = partitionConfig.partitionNames;
+  jf["backendNames"] = partitionConfig.backendNames;
+  jf["logicalIDs"] = partitionConfig.logicalIDs;
+
+  for (auto &&nodePartitionPair : partitionConfig.nodeToPartition){
+    std::string nodeName = std::string(nodePartitionPair.first());
+    jf["nodeToPartition"][nodeName] = nodePartitionPair.second;
+  }
+
+  std::string netname = partitionConfig.funcName.substr(0, partitionConfig.funcName.size()-7);
+
+  std::string config_path =
+      "../data/adas-pb-output/partition_configs/partition_config_"
+      + netname + "_" + std::to_string(partitionConfig.numOfPartitions)
+      + ".json";
+  LOG(INFO) << config_path;
+  std::ofstream file(config_path);
+  file << jf;
+
+  //LOG(INFO) << j.dump(2) << std::endl;
+}
+
 
 Expected<DAGListTy> Partitioner::loadBalancedPartition(CompilationContext &cctx,
                                                        size_t numDevices) {
@@ -1314,6 +1549,11 @@ Expected<DAGListTy> Partitioner::partition(CompilationContext &cctx) {
   if (!multiBackendNames_ && glow::GlowEnableLoadBalancedPartitioning) {
     // Call load-balance partition flow.
     return loadBalancedPartition(cctx);
+  }
+
+  if (!multiBackendNames_ && glow::GlowEnableTimeslotBalancedPartiton) {
+    // Call timeslot-balance partition flow.
+    return timeslotBalancedPartiton(cctx);
   }
 
   // Call heterogeneous partition flow.

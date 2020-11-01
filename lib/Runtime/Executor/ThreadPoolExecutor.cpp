@@ -59,7 +59,7 @@ void InflightBarrier::wait() {
   cv_.wait(lock, [&] { return count_ == 0; });
 }
 
-ThreadPoolExecutor::ThreadPoolExecutor(const DeviceManagerMapTy &deviceManagers,
+ThreadPoolExecutor::ThreadPoolExecutor(DeviceManagerMapTy &deviceManagers,
                                        unsigned numWorkers,
                                        const std::string &name)
     : threadPool_(numWorkers,
@@ -331,6 +331,11 @@ void ThreadPoolExecutor::createPool(const DAGNode *root, unsigned poolSize,
 }
 
 void ThreadPoolExecutor::freePool(const DAGNode *root) { states_.erase(root); }
+
+std::shared_ptr<DeviceManager> ThreadPoolExecutor::getDeviceManager(){
+  std::shared_ptr<DeviceManager> res = deviceManagers_.at(0);
+  return res;
+}
 
 } // namespace runtime
 } // namespace glow

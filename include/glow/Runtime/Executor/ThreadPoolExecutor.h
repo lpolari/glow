@@ -60,7 +60,7 @@ private:
 class ThreadPoolExecutor final : public Executor {
 public:
   /// Constructor.
-  explicit ThreadPoolExecutor(const DeviceManagerMapTy &deviceManagers,
+  explicit ThreadPoolExecutor(DeviceManagerMapTy &deviceManagers,
                               unsigned numWorkers = kNumWorkers,
                               const std::string &name = "");
 
@@ -79,6 +79,8 @@ public:
   ~ThreadPoolExecutor() override { shutdown(); }
 
   void shutdown() override;
+
+  std::shared_ptr<DeviceManager> getDeviceManager() override;
 
 private:
   /// Execute the DAG node specified by \p node within the run corresponding to
@@ -115,7 +117,7 @@ private:
   std::atomic<bool> shuttingDown_{false};
 
   /// Map of available DeviceManagers.
-  const DeviceManagerMapTy &deviceManagers_;
+  DeviceManagerMapTy &deviceManagers_;
 };
 
 } // namespace runtime

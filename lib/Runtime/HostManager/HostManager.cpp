@@ -619,3 +619,7 @@ bool runtime::loadDeviceConfigsFromFile(
 Backend &HostManager::getBackend(llvm::StringRef backendName) const {
   return provisioner_->getBackend(backendName);
 }
+
+std::shared_ptr<DeviceManager> HostManager::getDeviceManager(){
+  return executor_->getDeviceManager();
+}

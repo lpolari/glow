@@ -26,7 +26,7 @@
 namespace glow {
 
 /// The tensor payload is allocated to be aligned to this value.
-constexpr unsigned TensorAlignment = 64;
+constexpr unsigned TensorAlignment = 128;
 
 /// Allocate \p size bytes of memory aligned to \p align bytes.
 inline void *alignedAlloc(size_t size, size_t align) {

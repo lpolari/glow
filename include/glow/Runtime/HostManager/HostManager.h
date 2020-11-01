@@ -251,6 +251,10 @@ public:
   /// Provisioner.
   Backend &getBackend(llvm::StringRef backendName) const;
 
+  /// Return the device manager as a shared pointer. This is used by the
+  /// adas-pb tool to run benchmarks directly via the device manager
+  std::shared_ptr<DeviceManager> getDeviceManager();
+
   ~HostManager();
 };
 

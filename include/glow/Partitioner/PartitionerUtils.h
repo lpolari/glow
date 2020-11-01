@@ -42,6 +42,9 @@ NodesSet getInputs(const Node *node);
 /// Return the estimated op computation time based on \p backendInfo.
 float getNodeComputeTime(const Node *node, const BackendInfo &backendInfo);
 
+/// Return the estimated op computation time based on sampling
+int getEstimatedNodeComputeTime(const Node *node, llvm::StringRef name, const BackendInfo &backendInfo);
+
 /// Given a node, \returns the memory usage of its inputs (i.e. Storage input).
 uint64_t getNodeMemUsage(const Node *node);
 

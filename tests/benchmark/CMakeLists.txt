@@ -121,4 +121,36 @@ target_link_libraries(RuntimeBench
                         Graph
                         GraphOptimizer
                         benchmark)
+
+add_executable(adas-pb
+        adas-pb.cpp
+        ../../tools/loader/Loader.cpp)
+target_include_directories(adas-pb
+        PRIVATE
+        Backends
+        ${GLOW_SOURCE_DIR}/lib/Backends/CPU
+        ${GLOW_SOURCE_DIR}/lib/Backends/Interpreter
+        ${GLOW_SOURCE_DIR}/tools/loader)
+target_link_libraries(adas-pb
+        PRIVATE
+        Backend
+        Backends
+        ExecutionEngine
+        Executor
+        HostManager
+        Graph
+        GraphOptimizer
+        benchmark
+        Base
+        Importer
+        GraphOptimizer
+        Quantization
+        gtest
+        nlohmann_json
+        TestMain)
+add_glow_test(NAME adas-pb
+        COMMAND ${GLOW_BINARY_DIR}/tests/adas-pb
+        -m=model
+        --gtest_output=xml:adas-pb.xml
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()

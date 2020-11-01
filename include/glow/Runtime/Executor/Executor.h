@@ -53,6 +53,10 @@ public:
 
   /// Free the context pool for given network.
   virtual void freePool(const DAGNode *root) = 0;
+
+  /// Return the device manager as a shared pointer. This is used by the
+  /// adas-pb tool to run benchmarks directly via the device manager
+  virtual std::shared_ptr<DeviceManager> getDeviceManager() = 0;
 };
 
 } // namespace runtime

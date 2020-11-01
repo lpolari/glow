@@ -218,6 +218,8 @@ else()
   target_link_libraries(folly_jemalloc INTERFACE folly jemalloc)
 endif()
 
+add_subdirectory("${GLOW_THIRDPARTY_DIR}/json")
+
 add_library(Miniz
   ${GLOW_THIRDPARTY_DIR}/miniz-2.0.8/miniz.c)
 target_include_directories(Miniz PUBLIC ${GLOW_THIRDPARTY_DIR}/miniz-2.0.8)
