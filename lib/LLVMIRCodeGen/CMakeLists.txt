@@ -8,7 +8,7 @@ add_library(LLVMIRCodeGen
             GlowJIT.cpp
             Pipeline.cpp
             LLVMIRGen.cpp
-            LLVMBackend.cpp)
+            LLVMBackend.cpp LLVMStoppableTaskPass.cpp LLVMStoppableTaskPass.h)
 
 llvm_map_components_to_libnames(LLVM_TARGET_LIBRARIES ${LLVM_TARGETS_TO_BUILD})
 target_link_libraries(LLVMIRCodeGen

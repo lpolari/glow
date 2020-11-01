@@ -25,6 +25,7 @@
 #include "glow/Runtime/StatsExporter.h"
 
 #include <atomic>
+#include <glow/Runtime/Executor/NetworkExecutionState.h>
 #include <map>
 #include <mutex>
 #include <queue>
@@ -250,6 +251,18 @@ public:
   /// \returns a reference to the backend with name \p backendName owned by the
   /// Provisioner.
   Backend &getBackend(llvm::StringRef backendName) const;
+
+  const std::vector<TimeslotBarrier *> *getTimeslotBarriers(){
+    return this->executor_->getTimeslotBarriers();
+  }
+
+  std::vector<size_t> getDeviceLoadLeftPerTimeslot(DeviceIDTy deviceId, uint64_t p){
+    return devices_.at(deviceId)->getAvailableLoadPerTimeslot(p);
+  }
+
+  void setTimeslotSize(std::chrono::milliseconds timeslotSize){
+    this->executor_->setTimeslotSize(timeslotSize);
+  }
 
   ~HostManager();
 };

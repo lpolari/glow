@@ -15,6 +15,9 @@
  */
 #include "glow/Support/ThreadPool.h"
 #include "folly/system/ThreadName.h"
+#include "llvm/Support/DynamicLibrary.h"
+#include <glog/logging.h>
+#include <chrono>
 
 namespace glow {
 
@@ -31,13 +34,43 @@ size_t createThreadId() { return thread_idx++; }
 
 } // namespace threads
 
+using namespace std::literals;
+
 ThreadExecutor::ThreadExecutor(const std::string &name)
     : shouldStop_(false), worker_([this, name]() {
-        if (!name.empty()) {
-          folly::setThreadName(name);
-        }
-        threadPoolWorkerMain();
-      }) {}
+      sched_param* param = (sched_param*) malloc(sizeof(sched_param));
+      param->sched_priority = sched_get_priority_max(SCHED_FIFO);
+
+      // LPolariTodo Error Logging
+      int res = pthread_setschedparam(worker_.native_handle(), SCHED_FIFO, param);
+      LOG(INFO) << "Just set pthread priority // result: " << res << "\n";
+      LOG(INFO) << "MAX SCHED PRIO FIFO :: " << sched_get_priority_max(SCHED_FIFO)-1 << "\n";
+      cpu_set_t cpuset;
+      CPU_ZERO(&cpuset);
+      if (threads::getThreadId() == 0){
+        CPU_SET(0, &cpuset);
+        CPU_SET(2, &cpuset);
+        CPU_SET(4, &cpuset);
+        CPU_SET(6, &cpuset);
+      } else {
+        CPU_SET(1, &cpuset);
+        CPU_SET(3, &cpuset);
+        CPU_SET(5, &cpuset);
+        CPU_SET(7, &cpuset);
+      }
+
+      //CPU_SET(threads::getThreadId() + 6, &cpuset);
+      int rc = pthread_setaffinity_np(worker_.native_handle(),
+                                  sizeof(cpu_set_t), &cpuset);
+      if (rc != 0) {
+        LOG(INFO) << "Error calling pthread_setaffinity_np: " << rc << "\n";
+      }
+      if (!name.empty()) {
+        folly::setThreadName(name);
+      }
+      threadPoolWorkerMain();
+
+    }) {}
 
 ThreadExecutor::~ThreadExecutor() { stop(true); }
 
@@ -58,7 +91,6 @@ void ThreadExecutor::stop(bool block) {
 
 void ThreadExecutor::threadPoolWorkerMain() {
   std::unique_lock<std::mutex> lock(workQueueMtx_, std::defer_lock);
-
   while (!shouldStop_) {
     // Lock the lock after processing a work item.
     lock.lock();

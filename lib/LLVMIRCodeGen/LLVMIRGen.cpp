@@ -35,6 +35,8 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 using namespace glow;
 using llvm::cast;
@@ -305,6 +307,73 @@ void LLVMIRGen::finishCodeGen() {
   // Generate debug information.
   generateModuleDebugInfo();
 
+  auto M = &getModule();
+  llvm::Function *mainFunction = M->getFunction("jitmain");
+  llvm::LLVMContext &Context = mainFunction->getContext();
+
+  llvm::GlobalVariable *continue_flag = new llvm::GlobalVariable(*M,
+      llvm::IntegerType::getInt64Ty(Context),
+      false,
+      llvm::GlobalValue::ExternalLinkage,
+      0,
+      this->getContinueExecutionFlagName());
+
+  continue_flag->setAlignment(4);
+  int64_t ret_num = -1;
+
+  for (llvm::BasicBlock &BB : *mainFunction) {
+    llvm::CallInst* lastFuncCall = nullptr;
+
+    for (llvm::Instruction &I : BB){
+      if(! isa<llvm::CallInst>(&I)){
+        continue;
+      }
+      llvm::CallInst* funcCall = dyn_cast<llvm::CallInst>(&I);
+      if(funcCall == lastFuncCall){
+        break;
+      }
+      std::string calledFunction = funcCall->getCalledFunction()->getName().str();
+      if(calledFunction.find("libjit") == std::string::npos) {
+        continue;
+      }
+      builder_->SetInsertPoint(&I);
+
+      llvm::GlobalVariable *continue_flag
+          = M->getGlobalVariable(this->getContinueExecutionFlagName());
+      llvm::LoadInst* LI_continue_flag
+          =  builder_->CreateLoad (continue_flag, true);
+      LI_continue_flag->setDebugLoc(I.getDebugLoc());
+
+      LI_continue_flag->setAlignment(4);
+
+      llvm::Constant* zero
+          = llvm::Constant::getNullValue(llvm::IntegerType::getInt64Ty(Context));
+      llvm::Value* CMPI
+          = builder_->CreateICmpEQ  (zero, LI_continue_flag);
+
+      llvm::BasicBlock *Head = I.getParent();
+      llvm::BasicBlock *Tail = Head->splitBasicBlock(I.getIterator());
+
+      llvm::Instruction *HeadOldTerm = Head->getTerminator();
+      llvm::LLVMContext &C = Head->getContext();
+
+      llvm::BasicBlock *ThenBlock
+          = llvm::BasicBlock::Create(C, "ThenBlock",
+                                     Head->getParent(), Tail);
+      llvm::Instruction *CheckTerm;
+      CheckTerm = llvm::BranchInst::Create(Tail, ThenBlock);
+      CheckTerm->setDebugLoc(I.getDebugLoc());
+      builder_->SetInsertPoint(CheckTerm);
+      builder_->CreateRet(builder_->getInt64(static_cast<int64_t>(-1)));
+      llvm::BranchInst *HeadNewTerm =
+          llvm::BranchInst::Create(ThenBlock, Tail, CMPI);
+      CheckTerm->setDebugLoc(I.getDebugLoc());
+      llvm::ReplaceInstWithInst(HeadOldTerm, HeadNewTerm);
+      lastFuncCall = funcCall;
+    }
+    break;
+  }
+
   if (dumpIR) {
     llvm::outs() << "LLVM module after optimizations:\n";
     llmodule_->print(llvm::outs(), nullptr);
@@ -326,6 +395,14 @@ void LLVMIRGen::finishCodeGen() {
     PM.run(*llmodule_);
     llvm::outs() << asmStream.str();
   }
+}
+
+void LLVMIRGen::setContinueExecutionFlagName(std::string continue_execution_flag_name){
+  this->continue_execution_flag_name = continue_execution_flag_name;
+}
+
+std::string LLVMIRGen::getContinueExecutionFlagName(){
+  return this->continue_execution_flag_name;
 }
 
 llvm::Value *LLVMIRGen::emitValueAddress(llvm::IRBuilder<> &builder,

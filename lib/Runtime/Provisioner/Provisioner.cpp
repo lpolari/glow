@@ -51,6 +51,30 @@ auto sortMostMemory = [](const std::pair<DeviceIDTy, uint64_t> &a,
                          const std::pair<DeviceIDTy, uint64_t> &b) -> bool {
   return a.second > b.second;
 };
+
+auto sortMostLoad = [](const std::pair<DeviceIDTy,
+                                       std::map<uint64_t,
+                                                std::vector<uint64_t>>> &a,
+                         const std::pair<DeviceIDTy,
+                                       std::map<uint64_t ,
+                                                std::vector<uint64_t>>> &b,
+                       uint64_t p) -> bool {
+  uint64_t a_sum = std::accumulate(a.second.at(p).begin(),
+                                   a.second.at(p).end(), 0);
+  uint64_t b_sum = std::accumulate(b.second.at(p).begin(),
+                                   b.second.at(p).end(),0);
+  return a_sum < b_sum;
+};
+
+bool fitsInTimeslot(std::vector<uint64_t> loadLeft,
+                    std::vector<uint64_t> runtimes){
+  for (uint64_t i=0; i<loadLeft.size();i++){
+    if (loadLeft[i] < runtimes[i]){
+      return false;
+    }
+  }
+  return true;
+}
 } // namespace
 
 Provisioner::Provisioner(DeviceManagerMapTy &devices) {
@@ -131,7 +155,14 @@ Provisioner::generateDeviceAssignments(
     const std::vector<std::pair<DeviceIDTy, uint64_t>> &logicalDeviceSize,
     std::map<std::string, std::vector<std::pair<DeviceIDTy, uint64_t>>>
         &deviceMemoryMap,
-    std::map<DeviceIDTy, std::vector<DAGNode *>> &logicalDevices) {
+    std::map<std::string,
+             std::vector<std::pair<DeviceIDTy,
+                                   std::map<uint64_t ,
+                                            std::vector<uint64_t>>>>>
+        &deviceLoadPerTimeslotMap,
+    std::map<DeviceIDTy, std::vector<DAGNode *>> &logicalDevices,
+    size_t p_LO, size_t p_HI, std::string scheduling_policy) {
+
   // Generate assignments, logical DeviceID to physical DeviceID.
   std::map<DeviceIDTy, DeviceIDTy> deviceAssignment;
   // Setup iterators for each backend type, intialize them to 0.
@@ -139,6 +170,98 @@ Provisioner::generateDeviceAssignments(
   for (auto &device : deviceMemoryMap) {
     positions[device.first] = 0;
   }
+
+  /*  BEST FIT LOGICAL DEVICE ASSIGNMENT  */
+
+  for (auto logicalDevice : logicalDeviceSize) {
+    auto backendName = logicalDevices[logicalDevice.first][0]->backendName;
+
+    // GLOBALPERIODMARKER
+    // create runtime vector
+    std::map<uint64_t , std::vector<uint64_t>> runtimes
+        = {
+            {90, {}},
+            {95, {}},
+            {100, {}},
+            {105, {}},
+            {110, {}},
+        };
+    for (uint64_t i=0; i<4; i++){
+      DAGNode* node = logicalDevices[logicalDevice.first]
+                                    [i % logicalDevices[logicalDevice.first].size()];
+      runtimes.at(90).push_back(node->wcet90);
+      runtimes.at(95).push_back(node->wcet95);
+      runtimes.at(100).push_back(node->wcet100);
+      runtimes.at(105).push_back(node->wcet105);
+      runtimes.at(110).push_back(node->wcet110);
+    }
+
+    /*std::sort(deviceLoadPerTimeslotMap[backendName].begin(),
+              deviceLoadPerTimeslotMap[backendName].end(),
+              [](const std::pair<DeviceIDTy, std::map<uint64_t , std::vector<uint64_t>>> &a,
+                 const std::pair<DeviceIDTy, std::map<uint64_t , std::vector<uint64_t>>> &b) -> bool {
+                 return sortMostLoad(a, b, p);
+              });*/
+
+    // Test if DNN fits into the timeslots of the device
+    // in case of multiple devices the device is assigned using the
+    // First Fit Decreasing algorithm
+    bool found_device = false;
+    for (uint64_t i=0; i<deviceLoadPerTimeslotMap[backendName].size(); i++) {
+
+      bool fits;
+      if (scheduling_policy == "RDTS"){
+        fits = fitsInTimeslot(
+                   deviceLoadPerTimeslotMap[backendName][i].second.at(p_HI),
+                   runtimes.at(p_LO));
+      } else if (scheduling_policy == "MCDTS") {
+        fits = fitsInTimeslot(
+                   deviceLoadPerTimeslotMap[backendName][i].second.at(p_LO),
+                   runtimes.at(p_LO)) &&
+               fitsInTimeslot(
+                   deviceLoadPerTimeslotMap[backendName][i].second.at(p_HI),
+                   runtimes.at(p_HI));
+      }
+
+      // Test if network fits into timeslots
+      if (fits) {
+        // There is enough load left on the device
+        // Since we sorted the devices corresponding
+        // to the load left this assignment corresponds
+        // to the best fit mapping approach
+        found_device = true;
+
+        LOG(INFO) << "MAP " << logicalDevices[logicalDevice.first][0]->name
+                                   << " TO DEVICE : " << i;
+
+        deviceAssignment.emplace(
+            logicalDevice.first,
+            deviceLoadPerTimeslotMap[backendName][i].first);
+
+        // We do not have to update the loadPerTimeslotMap since
+        // we only have one logical Device to be assigned for
+        // each network
+        break;
+      }
+    }
+
+    if (!found_device){
+      return MAKE_ERR(
+          ErrorValue::ErrorCode::PROVISIONER_TIMESLOT_EXCEEDANCE,
+          "DNN does not fit into timeslots");
+    }
+  }
+
+  // Update nodes in logicalDevices with their assignments.
+  for (auto &assignment : deviceAssignment) {
+    for (auto &node : logicalDevices[assignment.first]) {
+      node->deviceRuntimeInfos[assignment.second] = DeviceRuntimeInfo();
+    }
+  }
+  return deviceAssignment;
+
+  /*  BEST FIT LOGICAL DEVICE ASSIGNMENT  */
+
   // Walk through the logical devices and assign them a physical device.
   // This approach will try to evenly spread networks across devices, we first
   // sort all devices by available space and then assign in descending order.
@@ -178,6 +301,20 @@ Provisioner::generateDeviceAssignments(
         // position to 0.
         std::sort(deviceMemoryMap[backendName].begin(),
                   deviceMemoryMap[backendName].end(), sortMostMemory);
+
+
+        /*std::sort(deviceLoadPerTimeslotMap[backendName].begin(),
+                  deviceLoadPerTimeslotMap[backendName].end(),
+                  [p](const std::pair<DeviceIDTy,
+                                      std::map<uint64_t,
+                                               std::vector<uint64_t>>> &a,
+                      const std::pair<DeviceIDTy,
+                                      std::map<uint64_t,
+                                               std::vector<uint64_t>>> &b)
+                      -> bool {
+                    return sortMostLoad(a, b, p);
+                  });*/
+
         positions[backendName] = 0;
       } else {
         // Increment current position by one.
@@ -257,11 +394,22 @@ Error Provisioner::provision(DAGListTy &networks, Module &module,
   // Get available device memory, create a map of vectors for each backend kind
   std::map<std::string, std::vector<std::pair<DeviceIDTy, uint64_t>>>
       deviceMemoryMap;
+  std::map<std::string, std::vector<std::pair<DeviceIDTy, std::map<
+                                                    uint64_t,std::vector<
+                                                        uint64_t>>>>>
+      deviceLoadPerTimeslotMap;
+
   for (unsigned i = 0; i < devices_.size(); i++) {
     uint64_t availableMemory = devices_[i]->getAvailableMemory();
-
     deviceMemoryMap[devices_[i]->getBackendName()].push_back(
         std::make_pair(i, availableMemory));
+    std::map<uint64_t, std::vector<uint64_t>> availableLoadPerRuntimeQuantile;
+    for (uint64_t p : {90, 95, 100, 105, 110}){
+      std::vector<uint64_t> availableLoad = devices_[i]->getAvailableLoadPerTimeslot(p);;
+      availableLoadPerRuntimeQuantile.insert({p, availableLoad});
+    }
+    deviceLoadPerTimeslotMap[devices_[i]->getBackendName()].push_back(
+        std::make_pair(i, availableLoadPerRuntimeQuantile));
   }
 
   // Sort all vectors in descending order of available memory.
@@ -271,7 +419,8 @@ Error Provisioner::provision(DAGListTy &networks, Module &module,
 
   // Generate assignments between physical and logical devices.
   auto deviceAssignments = generateDeviceAssignments(
-      logicalDeviceSize, deviceMemoryMap, logicalDevices);
+      logicalDeviceSize, deviceMemoryMap, deviceLoadPerTimeslotMap,
+      logicalDevices, cctx.p_LO, cctx.p_HI, cctx.scheduling_policy);
 
   // Check for errors.
   if (!deviceAssignments) {
@@ -391,6 +540,20 @@ Error Provisioner::provision(DAGListTy &networks, Module &module,
           return compiledOrErr.takeError();
         }
         auto compiled = std::move(*compiledOrErr);
+
+        compiled->setWCET90(node->wcet90);
+        compiled->setWCET95(node->wcet95);
+        compiled->setWCET100(node->wcet100);
+        compiled->setWCET105(node->wcet105);
+        compiled->setWCET110(node->wcet110);
+
+        std::vector<uint64_t> timeslotOffsets;
+        // GLOBALPERIODMARKER
+        for (uint64_t offset=node->timeslot_offset; offset<4; offset+=cctx.period){
+          timeslotOffsets.push_back(offset);
+        }
+        compiled->setTimeslotOffsets(timeslotOffsets);
+
         node->runtimeBundle =
             glow::make_unique<RuntimeBundle>(compiled->getRuntimeBundle());
 

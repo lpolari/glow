@@ -26,34 +26,11 @@
 
 namespace glow {
 namespace runtime {
+using namespace std::chrono_literals;
+using namespace std::chrono;
+using clock_type = std::chrono::high_resolution_clock;
 
 class ExecutionState;
-
-/// This class implements a simple barrier with which to wait for all threads
-/// to exit a certain section of code before proceeding.
-class InflightBarrier final {
-public:
-  /// Decrement the count of threads in the barrier by \p decr.
-  void decrement(unsigned decr = 1);
-
-  /// Increment the count of threads in the barrier by \p incr.
-  void increment(unsigned incr = 1);
-
-  /// \returns the current count of the barrier.
-  unsigned count();
-
-  /// Wait for the barrier count to hit zero before continuing. This is
-  /// potentially a blocking call.
-  void wait();
-
-private:
-  /// Count of threads inside the barrier.
-  unsigned count_{0};
-  /// Mutex for accessing count_;
-  std::mutex mtx_;
-  /// Condition variable for implementing wait().
-  std::condition_variable cv_;
-};
 
 /// This implementation of the Executor interface uses a thread pool to
 /// handle and process multiple concurrent execution runs.
@@ -62,7 +39,9 @@ public:
   /// Constructor.
   explicit ThreadPoolExecutor(const DeviceManagerMapTy &deviceManagers,
                               unsigned numWorkers = kNumWorkers,
-                              const std::string &name = "");
+                              const std::string &name = "",
+                              const std::vector<TimeslotBarrier*>
+                                  *timeslotBarriers = NULL);
 
   /// Setup context pool for new network.
   void createPool(const DAGNode *root, unsigned poolSize,
@@ -80,10 +59,26 @@ public:
 
   void shutdown() override;
 
+  const std::vector<TimeslotBarrier *> *getTimeslotBarriers() override{
+    return this->timeslotBarriers_;
+  }
+
+  void setTimeslotSize(milliseconds timeslotSize) override {
+    this->timeslotSize = timeslotSize;
+  }
+
 private:
   /// Execute the DAG node specified by \p node within the run corresponding to
   /// \p state.
-  void executeDAGNode(NetworkExecutionState *executionState, DAGNode *node);
+  void executeDAGNode(NetworkExecutionState *executionState,
+                      DAGNode *node,
+                      unsigned criticality,
+                      time_point<clock_type,milliseconds> deadline);
+
+  void executeDAGNodeAsync(NetworkExecutionState *executionState,
+                           DAGNode *node,
+                           unsigned criticality,
+                           time_point<clock_type, milliseconds> deadline);
 
   /// Handle the result returned asynchronously by the DeviceManager.
   /// \p executionState is tracks the state of the run that the node that
@@ -96,10 +91,10 @@ private:
   void handleDeviceManagerResult(NetworkExecutionState *executionState,
                                  Error err,
                                  std::unique_ptr<ExecutionContext> ctx,
-                                 const DAGNode *node);
+                                 DAGNode *node);
 
   /// The default number of workers in the thread pool.
-  constexpr static unsigned kNumWorkers = 3;
+  constexpr static unsigned kNumWorkers = 20;
   /// The thread pool used to drive execution.
   folly::CPUThreadPoolExecutor threadPool_;
 
@@ -107,6 +102,8 @@ private:
   std::unordered_map<const DAGNode *,
                      std::unique_ptr<NetworkExecutionStatePool>>
       states_;
+
+  const std::vector<TimeslotBarrier *> *timeslotBarriers_;
 
   /// Barrier for making sure all asynchronous requests made to the
   /// DeviceManager return before allowing destruction of the executor.
@@ -116,6 +113,9 @@ private:
 
   /// Map of available DeviceManagers.
   const DeviceManagerMapTy &deviceManagers_;
+
+  /// Global Timeslot Size
+  milliseconds timeslotSize = 0ms;
 };
 
 } // namespace runtime

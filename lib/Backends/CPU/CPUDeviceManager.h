@@ -53,6 +53,9 @@ public:
   /// Returns the amount of memory in bytes currently availbe on the device.4
   uint64_t getAvailableMemory() const override;
 
+  /// Returns a vector of load per timeslot for the specified p-quantile
+  std::vector<uint64_t> getAvailableLoadPerTimeslot(uint64_t p) const override;
+
   /// Returns true if a function requiring the \p estimate size will fit on the
   /// device. This is not a promise as memory cost could vary due to alignment,
   /// etc.

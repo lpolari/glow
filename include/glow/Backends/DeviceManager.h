@@ -65,12 +65,18 @@ protected:
   /// Amount of memory used by all models.
   std::atomic<uint64_t> usedMemoryBytes_{0};
 
+  /// Load per timeslot
+  std::map<uint64_t, std::vector<uint64_t>> availableLoadPerTimeslot;
+
   /// Keeps the stats exporter registry object alive till destructor.
   std::shared_ptr<StatsExporterRegistry> statsExporterRegistry_;
 
   /// Set of all buffer allocations, these should all be freed when the device
   /// manager is destroyed.
   std::set<void *> allocations_;
+
+  uint64_t continue_execution = 1;
+  uint64_t reset_continue_execution_flag = 0;
 
   /// Helper method to export memory usage counters.
   void exportMemoryCounters() {
@@ -92,9 +98,16 @@ public:
                             std::to_string(config_.deviceID)),
         usedMemoryKey_("glow.device.used_memory.device" +
                        std::to_string(config_.deviceID)),
-        maxMemoryBytes_(config_.getDeviceMemory(2000000000)),
-        statsExporterRegistry_(StatsExporterRegistry::Stats()) {}
-
+        maxMemoryBytes_(config_.getDeviceMemory(5000000000)),
+        statsExporterRegistry_(StatsExporterRegistry::Stats()),
+        // GLOBALPERIODMARKER
+        availableLoadPerTimeslot({
+            {90, {config_.timeslot_size, config_.timeslot_size, config_.timeslot_size, config_.timeslot_size}},
+            {95, {config_.timeslot_size, config_.timeslot_size, config_.timeslot_size, config_.timeslot_size}},
+            {100, {config_.timeslot_size, config_.timeslot_size, config_.timeslot_size, config_.timeslot_size}},
+            {105, {config_.timeslot_size, config_.timeslot_size, config_.timeslot_size, config_.timeslot_size}},
+            {110, {config_.timeslot_size, config_.timeslot_size, config_.timeslot_size, config_.timeslot_size}}
+        }){}
   virtual ~DeviceManager() {
     // Free all allocated buffers.
     for (auto &buffer : allocations_) {
@@ -158,6 +171,7 @@ public:
   virtual runtime::RunIdentifierTy
   runFunction(std::string functionName,
               std::unique_ptr<ExecutionContext> context,
+              TimeslotBarrier* barrier,
               runtime::ResultCBTy resultCB) = 0;
 
   /// Copies the contents of Tensor \p T to the device resource allocated to
@@ -191,6 +205,17 @@ public:
   /// \returns the currently available memory (in bytes) available on the
   /// device, for provisioning new networks.
   virtual uint64_t getAvailableMemory() const = 0;
+
+  /// \returns available load (runtime) per timeslot (in ms) available on the
+  /// device, for provisioning new networks.
+  virtual std::vector<uint64_t> getAvailableLoadPerTimeslot(uint64_t p)
+      const = 0;
+
+  /// Stops the execution of all Functions by setting the "continue_execution"
+  /// flag that is regularly checked by all Functions
+  virtual void stopAllFunctions(){
+    this->continue_execution = 0;
+  }
 
   /// \returns true if we expect a Module with the estimated constant size will
   /// fit on the device.

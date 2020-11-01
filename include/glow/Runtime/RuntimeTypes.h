@@ -118,6 +118,15 @@ struct DAGNode {
   /// Size of constants and placeholders used by the function.
   uint64_t size{0};
 
+  /// Worst case execution time at p percent
+  uint64_t wcet90;
+  uint64_t wcet95;
+  uint64_t wcet100;
+  uint64_t wcet105;
+  uint64_t wcet110;
+
+  uint64_t timeslot_offset;
+
   /// Backend Hints object, this is populated by the Partitioner and is used
   /// to communicated hints to the compiler, like SRAM pinning and resource
   /// reservation.
@@ -200,6 +209,8 @@ struct DeviceConfig {
   uint64_t deviceMemory = 0;
   /// A map of configuration parameters.
   llvm::StringMap<std::string> parameters{};
+  /// timeslot size
+  size_t timeslot_size;
 
   DeviceConfig(llvm::StringRef backendName) : backendName(backendName) {}
   DeviceConfig(llvm::StringRef backendName, llvm::StringRef name)
@@ -212,6 +223,10 @@ struct DeviceConfig {
   bool hasName() const { return name != ""; }
 
   void setDeviceMemory(uint64_t memSize) { deviceMemory = memSize; }
+
+  void setTimeslotSize(size_t timeslot_size) {
+      this->timeslot_size = timeslot_size;
+  }
 
   uint64_t getDeviceMemory() const { return deviceMemory; }
 
@@ -228,7 +243,7 @@ struct HostConfig {
   /// Number of requests to queue up before refusing further requests.
   size_t maxQueueSize{100};
   /// Number of threads to allocate to the Executor.
-  size_t executorThreads{3};
+  size_t executorThreads{20};
 };
 
 /// This is struct for user defined partition.
@@ -255,6 +270,23 @@ struct PartitionConfig {
   /// name in Glow function and may be different from the original name from
   /// models. Since Glow will mangle names to make them unique.
   llvm::StringMap<size_t> nodeToPartition;
+  /// vector at position i holds wcet90 of partition partitionNames[i] on
+  /// backendNames[i]
+  std::vector<size_t> wcet90;
+  /// vector at position i holds wcet95 of partition partitionNames[i] on
+  /// backendNames[i]
+  std::vector<size_t> wcet95;
+  /// vector at position i holds wcet100 of partition partitionNames[i] on
+  /// backendNames[i]
+  std::vector<size_t> wcet100;
+  /// vector at position i holds wcet105 of partition partitionNames[i] on
+  /// backendNames[i]
+  std::vector<size_t> wcet105;
+  /// vector at position i holds wcet110 of partition partitionNames[i] on
+  /// backendNames[i]
+  std::vector<size_t> wcet110;
+
+
 
   PartitionConfig() : numOfPartitions(0) {}
   bool enabled() { return numOfPartitions > 0; }
@@ -281,6 +313,64 @@ struct ContextBinding {
   DeviceManager *device;
   /// The name of the network.
   std::string networkName;
+};
+
+/// This class implements a simple barrier with which to wait for all threads
+/// to exit a certain section of code before proceeding.
+class InflightBarrier final {
+public:
+  /// Decrement the count of threads in the barrier by \p decr.
+  void decrement(unsigned decr = 1);
+
+  /// Increment the count of threads in the barrier by \p incr.
+  void increment(unsigned incr = 1);
+
+  /// \returns the current count of the barrier.
+  unsigned count();
+
+  /// Wait for the barrier count to hit zero before continuing. This is
+  /// potentially a blocking call.
+  void wait();
+
+
+private:
+  /// Count of threads inside the barrier.
+  unsigned count_{0};
+  /// Mutex for accessing count_;
+  std::mutex mtx_;
+  /// Condition variable for implementing wait().
+  std::condition_variable cv_;
+};
+
+/// This class implements a simple barrier with which to wait for the
+/// Start of the Timeslot of a DAG Node
+class TimeslotBarrier final {
+public:
+  /// Decrement the count of threads in the barrier by \p decr.
+  void decrement(unsigned decr = 1);
+
+  /// Increment the count of threads in the barrier by \p incr.
+  void increment(unsigned incr = 1);
+
+  /// \returns the current count of the barrier.
+  unsigned count();
+
+  /// Wait for the barrier count to hit level before continuing. This is
+  /// potentially a blocking call.
+  void wait(unsigned level);
+
+  void setFramenumber(unsigned framenumber);
+
+  unsigned getFramenumber();
+
+private:
+  unsigned framenumber;
+  /// Count of threads inside the barrier.
+  unsigned count_{0};
+  /// Mutex for accessing count_;
+  std::mutex mtx_;
+  /// Condition variable for implementing wait().
+  std::condition_variable cv_;
 };
 
 } // namespace runtime

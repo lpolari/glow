@@ -29,6 +29,8 @@
 namespace glow {
 namespace runtime {
 
+std::mutex network_mutex[10];
+
 void InflightBarrier::decrement(unsigned decr) {
   std::unique_lock<std::mutex> lock(mtx_);
   DCHECK_GE(count_, decr) << "Barrier decrement cannot be less than count!";
@@ -59,12 +61,52 @@ void InflightBarrier::wait() {
   cv_.wait(lock, [&] { return count_ == 0; });
 }
 
-ThreadPoolExecutor::ThreadPoolExecutor(const DeviceManagerMapTy &deviceManagers,
+void TimeslotBarrier::decrement(unsigned decr) {
+  std::unique_lock<std::mutex> lock(mtx_);
+  DCHECK_GE(count_, decr) << "Barrier decrement cannot be less than count!";
+  count_ -= decr;
+
+  cv_.notify_all();
+}
+
+void TimeslotBarrier::increment(unsigned incr) {
+  std::unique_lock<std::mutex> lock(mtx_);
+  count_ += incr;
+}
+
+unsigned TimeslotBarrier::count() {
+  std::unique_lock<std::mutex> lock(mtx_);
+  return count_;
+}
+
+void TimeslotBarrier::wait(unsigned level) {
+  std::unique_lock<std::mutex> lock(mtx_);
+  // If count_ is not 0, wait until a signal is received that it is.
+  // The second argument below is a predicate that returns true when
+  // it is safe to wake up. It preserves correctness in the case of
+  // spurious wakeups.
+  cv_.wait(lock, [&] { return count_ <= level; });
+}
+
+void TimeslotBarrier::setFramenumber(unsigned framenumber){
+  this->framenumber = framenumber;
+}
+
+unsigned TimeslotBarrier::getFramenumber(){
+  return this->framenumber;
+}
+
+ThreadPoolExecutor::ThreadPoolExecutor(const DeviceManagerMapTy
+                                           &deviceManagers,
                                        unsigned numWorkers,
-                                       const std::string &name)
+                                       const std::string &name,
+                                       const std::vector<TimeslotBarrier*>
+                                           *timeslotBarriers)
     : threadPool_(numWorkers,
                   std::make_shared<folly::NamedThreadFactory>(name)),
-      deviceManagers_(deviceManagers) {}
+      deviceManagers_(deviceManagers){
+        this->timeslotBarriers_ = timeslotBarriers;
+}
 
 void ThreadPoolExecutor::shutdown() {
   // Prevent more requests from being processed.
@@ -79,10 +121,24 @@ void ThreadPoolExecutor::shutdown() {
   threadPool_.join();
 }
 
+void publishTimeslotBarriersToExecutionState(NetworkExecutionState *state,
+                                          const DAGNode *node,
+    unsigned offset, unsigned period, unsigned level){
+  state->setNodeOffset(node, (offset + level) % 4);
+  for (DAGNode *child : node->children){
+    publishTimeslotBarriersToExecutionState(state, child , offset,
+                                            period, ++level);
+  }
+}
+
+
 void ThreadPoolExecutor::run(const DAGNode *root,
                              std::unique_ptr<ExecutionContext> context,
                              RunIdentifierTy runId, ResultCBTy cb) {
   DCHECK(cb != nullptr);
+
+  unsigned criticality = context->getCriticality();
+  time_point<clock_type, milliseconds> deadline = context->getNextDeadline();
 
   TRACE_EVENT_SCOPE(context->getTraceContext(), TraceLevel::RUNTIME,
                     "ThreadPoolExecutor::run");
@@ -121,6 +177,15 @@ void ThreadPoolExecutor::run(const DAGNode *root,
 
   // Get and bind state.
   auto currentState = states_[root]->getNextNetworkExecutionState();
+
+  currentState->setTimeslotBarriers(this->timeslotBarriers_);
+  currentState->setPeriod(context->getPeriod());
+
+  for (const DAGNode *child : root->children){
+    publishTimeslotBarriersToExecutionState(currentState, child,
+        context->getOffset(), context->getPeriod(), 0);
+  }
+
   TRACE_EVENT_BEGIN(traceContext, TraceLevel::RUNTIME,
                     "bind network execution state");
   currentState->bind(std::move(context), std::move(cb), runId);
@@ -135,24 +200,71 @@ void ThreadPoolExecutor::run(const DAGNode *root,
   TRACE_EVENT_SCOPE_END();
   for (auto const &node : root->children) {
     // Run with cached state
-    executeDAGNode(currentState, node);
+    executeDAGNodeAsync(currentState, node, criticality, deadline);
   }
 }
 
+void ThreadPoolExecutor::executeDAGNodeAsync(NetworkExecutionState *executionState,
+                                             DAGNode *node, unsigned criticality,
+                                             time_point
+                                                 <clock_type,
+                                              milliseconds> deadline){
+  threadPool_.add([this, executionState, node, criticality, deadline]() mutable {
+    executeDAGNode(executionState, node, criticality, deadline);
+  });
+}
+
 void ThreadPoolExecutor::executeDAGNode(NetworkExecutionState *executionState,
-                                        DAGNode *node) {
+                                        DAGNode *node, unsigned criticality,
+                                        time_point
+                                            <clock_type,
+                                         milliseconds> deadline) {
   TRACE_EVENT_SCOPE(executionState->getRawResultContextPtr()->getTraceContext(),
                     TraceLevel::RUNTIME, "ThreadPoolExecutor::executeDAGNode");
+
+  /// Set maximum scheduling priority for the executor
+  auto thread_id = std::this_thread::get_id();
+  auto native_handle = *reinterpret_cast<std::thread::native_handle_type*>(&thread_id);
+  sched_param* param = (sched_param*) malloc(sizeof(sched_param));
+  param->sched_priority = sched_get_priority_max(SCHED_FIFO);
+  pthread_setschedparam(native_handle, SCHED_FIFO, param);
+
+  /// Wait for the timeslot barrier to open
+  TimeslotBarrier *timeslotBarrier = executionState
+                                         ->getTimeslotBarrier(node);
+  size_t offset = timeslotBarrier->getFramenumber();
+  LOG(INFO) << "[" << node->name << "] Wait for frame " << offset << "!\n";
+  LOG(INFO) << "[" << node->name << "] Current barrier counter :: "
+            << timeslotBarrier->count() << "\n";
+  timeslotBarrier->wait(criticality);
+  TRACE_EVENT_BEGIN(executionState->getRawResultContextPtr()
+                        ->getTraceContext(),
+                    TraceLevel::RUNTIME, "Enter timeslot");
+
+  LOG(INFO) << "[" << node->name << "] Barrier is open for frame "
+            << timeslotBarrier->getFramenumber() << "\n";
+
   if (executionState->getErrorContainer().containsErr()) {
+    // LPolariToDo uncomment error checking
     // Mark the node as no longer executing.
-    executionState->decrementInflightNodes();
-    inflightBarrier_.decrement();
-    return;
+    //executionState->decrementInflightNodes();
+    //inflightBarrier_.decrement();
   }
 
   // Get the PlaceholderBindings containing all of the inputs for the node.
   std::unique_ptr<ExecutionContext> nodeCtx =
       executionState->getUniqueNodeContextPtr(node);
+  nodeCtx->setCriticality(criticality);
+  nodeCtx->setNextDeadline(deadline);
+  nodeCtx->setOffset(offset);
+
+  // Set context name. This is the same as the module / network name
+  // This is needed later to declare the global continue execution flag
+  // for the functions of the module
+  std::string function_name = node->name;
+  int found = function_name.find_last_of("_");
+  std::string module_name = function_name.substr(0,found);
+  nodeCtx->setName(module_name);
 
   // Get the DeviceManager that can run the node.
   auto currentDevice = node->getNextDevice();
@@ -173,13 +285,18 @@ void ThreadPoolExecutor::executeDAGNode(NetworkExecutionState *executionState,
     deviceManager = nodeCtx->getBoundDeviceManager();
   }
 
+  TRACE_EVENT_END(executionState->getRawResultContextPtr()->getTraceContext(),
+                  TraceLevel::RUNTIME, "Enter timeslot");
+
   // End the trace block before calling deviceManager->runFunction which can
   // trigger the result cb in a different thread. Once the result cb is called,
   // it's no longer safe to access the trace context.
   TRACE_EVENT_SCOPE_END();
   // Run the node using the DeviceManager.
+  LOG(INFO) << "[" << node->name << "] Execute function via device manager!\n";
+
   deviceManager->runFunction(
-      node->name, std::move(nodeCtx),
+      node->name, std::move(nodeCtx), timeslotBarrier,
       [this, executionState, currentDevice,
        node](RunIdentifierTy id, Error err,
              std::unique_ptr<ExecutionContext> resultCtx) {
@@ -196,7 +313,9 @@ void ThreadPoolExecutor::executeDAGNode(NetworkExecutionState *executionState,
                              "handle result queuing", TraceEvent::AsyncEndType,
                              TraceEvent::now(), id);
 
-          node->markFinished(currentDevice);
+          if (!err){
+            node->markFinished(currentDevice);
+          }
           this->handleDeviceManagerResult(executionState, std::move(err),
                                           std::move(ctx), node);
         });
@@ -205,21 +324,53 @@ void ThreadPoolExecutor::executeDAGNode(NetworkExecutionState *executionState,
 
 void ThreadPoolExecutor::handleDeviceManagerResult(
     NetworkExecutionState *executionState, Error err,
-    std::unique_ptr<ExecutionContext> ctx, const DAGNode *node) {
+    std::unique_ptr<ExecutionContext> ctx, /*const*/ DAGNode *node) {
+  size_t pos = node->name.find("_id");
+  std::string str2 = node->name.substr (pos+3,1);
+  size_t index = stoi(str2) -  1;
+  LOG(INFO) << "Lock network mutex for network id " << index;
+  network_mutex[index].lock();
+
   TraceContext *traceContext = ctx->getTraceContext();
+
+  LOG(INFO) << "[" << node->name << "] Handle device manager results\n";
+  
+  //  Decrement the timeslotBarrier for the following frame after each
+  //  subnet execution
+  //  New networks should only execute when all previous networks
+  //  returned
+  LOG(INFO) << "[" << node->name
+            << "] Decrement TimeslotBarrier for following timeslot "
+            << std::to_string((ctx->getOffset() + 1) % 4);
+  TimeslotBarrier *timeslotBarrier = executionState->getNextTimeslotBarrier(node);
+  timeslotBarrier->decrement();
+
   if (traceContext) {
     TRACE_EVENT_BEGIN(traceContext, TraceLevel::RUNTIME,
                       "ThreadPoolExecutor::handleResult");
   }
-
   auto runWasSuccess = !err;
 
   // Set the result code for the run.
   executionState->getErrorContainer().set(std::move(err));
 
+  //   GLOBALPERIODMARKER
+  size_t criticality = ctx->getCriticality();
+  time_point<clock_type, milliseconds>
+      deadline = ctx->getNextDeadline() + this->timeslotSize;
+  size_t offset = (ctx->getOffset() + 1) % 4;
+  LOG(INFO) << "[" << node->name << "] Increment offset to " << offset;
+  LOG(INFO) << "[" << node->name << "] Increment deadline to "
+            << deadline.time_since_epoch().count();
+
+  //LOG(INFO) << "[" << node->name << "] Return intermeddiate execution state";
+  executionState->returnUniqueNodeContextPtr(node, std::move(ctx));
+
   // If the DeviceManager executed the node, propagate its output Placeholders
   // to its children or the result PlaceholderBindings as appropriate.
   if (runWasSuccess) {
+    LOG(INFO) << "[" << node->name << "] Run was successful\n";
+
     for (auto &child : node->children) {
       // Execute any child that has no parent nodes left to execute.
       bool childReadyToExecute =
@@ -228,12 +379,48 @@ void ThreadPoolExecutor::handleDeviceManagerResult(
         // Mark the node as "inflight" (i.e. currently executing).
         executionState->incrementInflightNodes();
         inflightBarrier_.increment();
-        executeDAGNode(executionState, child);
+        LOG(INFO) << "[" << node->name << "] Dispatch next\n";
+        executeDAGNode(executionState, child, criticality, deadline);
+
+        //executionState->returnUniqueNodeContextPtr(node, std::move(ctx));
+        executionState->decrementInflightNodes();
+        inflightBarrier_.decrement();
+
+        if (traceContext) {
+          TRACE_EVENT_END(traceContext, TraceLevel::RUNTIME,
+                          "ThreadPoolExecutor::handleResult");
+          executionState->insertIntoTraceContext(traceContext);
+        }
+
+        LOG(INFO) << "Unlock network mutex for network id " << index;
+        network_mutex[index].unlock();
+        return;
       }
     }
   }
-  // Return intermediateContext to executionState.
-  executionState->returnUniqueNodeContextPtr(node, std::move(ctx));
+
+  // If the run was not successful, shift all subnets of the corresponding
+  // dnn and execute the current one again
+  if (!runWasSuccess){
+    LOG(INFO) << "[" << node->name << "] Run was successful\n";
+    executionState->incrementInflightNodes();
+    inflightBarrier_.increment();
+    executionState->shiftTimeslotBarriers();
+    LOG(INFO) << "[" << node->name << "] Dispatch again\n";
+    executeDAGNode(executionState, node, criticality, deadline);
+    executionState->decrementInflightNodes();
+    inflightBarrier_.decrement();
+
+    if (traceContext) {
+      TRACE_EVENT_END(traceContext, TraceLevel::RUNTIME,
+                      "ThreadPoolExecutor::handleResult");
+      executionState->insertIntoTraceContext(traceContext);
+    }
+
+    LOG(INFO) << "Unlock network mutex for network id " << index;
+    network_mutex[index].unlock();
+    return;
+  }
 
   // This needs to happen before decrementInflightNodes(). Otherwise a race
   // condition can happen where two threads call into this function at the same
@@ -262,6 +449,9 @@ void ThreadPoolExecutor::handleDeviceManagerResult(
     auto runId = executionState->getRunId();
     auto err = executionState->getErrorContainer().get();
     auto resultCtx = executionState->getUniqueResultContextPtr();
+    LOG(INFO) << "[" << node->name << "] Set result offset " << offset;
+    resultCtx->setOffset(offset);
+    resultCtx->setNextDeadline(deadline);
     states_[executionState->getRoot()]->returnNetworkExecutionState(
         executionState);
 
@@ -275,6 +465,8 @@ void ThreadPoolExecutor::handleDeviceManagerResult(
   // is done using it (e.g. when erasing the ExecutionState object for a
   // run).
   inflightBarrier_.decrement();
+  LOG(INFO) << "Unlock network mutex for network id " << index;
+  network_mutex[index].unlock();
 }
 
 void ThreadPoolExecutor::createPool(const DAGNode *root, unsigned poolSize,

@@ -101,6 +101,10 @@ std::string GlowErrorValue::errorCodeToString(const ErrorCode &ec) {
     return "COMPILE_UNSUPPORTED_IR_AFTER_GENERATE";
   case ErrorCode::COMPILE_UNSUPPORTED_IR_AFTER_OPTIMIZE:
     return "COMPILE_UNSUPPORTED_IR_AFTER_OPTIMIZE";
+  case ErrorCode::RUNTIME_EXECUTION_TIMEOUT:
+    return "RUNTIME_EXECUTION_TIMEOUT";
+  case ErrorCode::PROVISIONER_TIMESLOT_EXCEEDANCE:
+    return "PROVISIONER_TIMESLOT_EXCEEDANCE";
   };
   LOG(FATAL) << "Unsupported ErrorCode";
 }

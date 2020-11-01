@@ -56,6 +56,12 @@ public:
   /// Returns the amount of memory in bytes currently availbe on the device.
   uint64_t getAvailableMemory() const override;
 
+  std::vector<uint64_t> getAvailableLoadPerTimeslot(uint64_t p) const override{
+    /// dummy implementation
+    /// not yet supported yet for adas-dnnr
+    return {};
+  }
+
   /// Returns true if a function requiring the \p estimate size will fit on the
   /// device. This is not a promise as memory cost could vary due to alignment,
   /// etc.

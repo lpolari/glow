@@ -199,6 +199,19 @@ void TraceContext::dump(llvm::StringRef filename,
                               std::move(processName), getThreadNames());
 }
 
+size_t TraceContext::getCPUUtilization(){
+  auto events = this->getTraceEvents();
+  size_t res = 0;
+  for (auto &event : events){
+    if (event.name.rfind("DeviceManager::run", 0) == 0) {
+      if (!event.args.count("reason")){
+        res += event.duration;
+      }
+    }
+  }
+  return res;
+}
+
 void TraceContext::merge(TraceContext *other) {
   std::lock_guard<std::mutex> l(lock_);
   auto &newEvents = other->getTraceEvents();

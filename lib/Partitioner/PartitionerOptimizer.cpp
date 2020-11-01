@@ -249,4 +249,33 @@ assignLogicalDeviceID(NodeToFunctionMap &mapping,
   }
   return logicalDeviceID;
 }
+
+
+DeviceIDTy
+assignSameLogicalDeviceToAllSubnets(
+    NodeToFunctionMap &mapping,
+    const std::map<std::string, BackendInfo> &backendMap) {
+  // LPolariToDo Refactor
+  // First Loop necessary?
+
+  std::map<std::string, std::vector<Function *>> backendFuncMap;
+  for (auto &func : mapping.getPartitions()) {
+    // Traverse the partitions, and get list of partitions with each
+    // backendName.
+    auto backendName = mapping.getPartitionBackendName(func);
+    if (backendFuncMap.find(backendName) == backendFuncMap.end()) {
+      backendFuncMap.emplace(backendName, std::vector<Function *>{func});
+    } else {
+      backendFuncMap[backendName].push_back(func);
+    }
+  }
+  for (const auto &p : backendFuncMap) {
+    for (auto &func : p.second) {
+        mapping.appendLogicalDeviceID(func, 0);
+      }
+      continue;
+  }
+}
+
+
 } // namespace glow

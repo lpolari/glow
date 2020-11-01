@@ -9,4 +9,5 @@ target_link_libraries(Partitioner
                       PRIVATE
                         Backends
                         Graph
-                        GraphOptimizer)
+                        GraphOptimizer
+                        nlohmann_json)

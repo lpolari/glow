@@ -34,7 +34,7 @@ target_link_libraries(ptb
                         LLVMSupport)
 
 add_executable(char-rnn
-                 char-rnn.cpp)
+                 char-rnn.cpp adas-dnnr.cpp adas-dnnr.h)
 target_link_libraries(char-rnn
                       PRIVATE
                         Backends
@@ -87,6 +87,19 @@ if(GLOW_WITH_CPU)
                           Graph
                           Importer)
   target_include_directories(resnet-runtime PUBLIC ${CMAKE_SOURCE_DIR}/lib)
+
+  add_executable(adas-dnnr
+          adas-dnnr.cpp)
+  target_link_libraries(adas-dnnr
+          PRIVATE
+          Backends
+          ExecutionContext
+          ExecutionEngine
+          HostManager
+          Partitioner
+          Graph
+          Importer)
+  target_include_directories(adas-dnnr PUBLIC ${CMAKE_SOURCE_DIR}/lib)
 
   add_executable(tracing-compare
                    tracing-compare.cpp)

@@ -93,6 +93,10 @@ public:
 
   void stop(bool block = false);
 
+  int getQueueEmpty(){
+    return this->workQueue_.size();
+  }
+
 protected:
   /// Main loop run by the workers in the thread pool.
   void threadPoolWorkerMain();
@@ -149,6 +153,10 @@ public:
   ThreadExecutor *getExecutor() {
     size_t exIndex = nextWorker_++;
     return workers_[exIndex % workers_.size()];
+  }
+
+  int getQueueEmpty(){
+    return this->getExecutor()->getQueueEmpty();
   }
 
   /// Run the provided function on every thread in the ThreadPool. The function

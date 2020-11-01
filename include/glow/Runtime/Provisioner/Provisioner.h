@@ -98,7 +98,12 @@ private:
       const std::vector<std::pair<DeviceIDTy, uint64_t>> &logicalDeviceSize,
       std::map<std::string, std::vector<std::pair<DeviceIDTy, uint64_t>>>
           &deviceMemoryMap,
-      std::map<DeviceIDTy, std::vector<DAGNode *>> &logicalDevices);
+      std::map<std::string,
+          std::vector<std::pair<DeviceIDTy,
+              std::map<uint64_t ,
+                  std::vector<uint64_t>>>>>  &deviceLoadPerTimeslotMap,
+      std::map<DeviceIDTy, std::vector<DAGNode *>> &logicalDevices,
+      size_t p_LO, size_t p_HI, std::string scheduling_policy);
 };
 } // namespace runtime
 } // namespace glow

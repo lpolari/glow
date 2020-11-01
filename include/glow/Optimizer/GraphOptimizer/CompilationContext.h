@@ -125,6 +125,14 @@ struct OptimizationOptions {
 
 /// Context for compilation.
 struct CompilationContext {
+
+  /// DNN scheduling policy (MCDTS vs RDTS)
+  std::string scheduling_policy;
+
+  /// percentage used to determine runtime quantiles for high and low crit DNNs
+  size_t p_LO;
+  size_t p_HI;
+
   /// Used during Profiling.
   PlaceholderBindings *bindings{nullptr};
 
@@ -153,6 +161,21 @@ struct CompilationContext {
 
   /// Configuration for different precision modes.
   PrecisionConfiguration precisionConfig;
+
+  //  period of the network. Used for time slot balanced partitioning
+  uint64_t period;
+
+  //  criticality of the network
+  size_t criticality;
+
+  //  network name to load partion config if necessary
+  std::string network_name;
+
+  //  network id
+  size_t network_id;
+
+  //  partition config fie location
+  std::string partitionConfigFilename;
 
   /// How to annotate the compilation log filename.
   std::string compilationLogPrefix{"glow"};

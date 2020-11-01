@@ -203,6 +203,10 @@ public:
   Expected<DAGListTy> loadBalancedPartition(CompilationContext &cctx,
                                             size_t numDevices = 0);
 
+  /// Load partition config from a json file, given in the compilation
+  /// context
+  Expected<DAGListTy> partitionFromJsonConfig(CompilationContext &cctx);
+
   // This partition approach is meant for SparseNN models. The SLS tables are
   // split across logical devices and the non-SLS nodes are assigned in a
   // round-robin fashion to all logical devices.

@@ -156,6 +156,8 @@ protected:
   DebugInfo dbgInfo_;
   /// Debug info builder.
   std::unique_ptr<llvm::DIBuilder> DIBuilder_;
+  /// name of global flag to stop inference
+  std::string continue_execution_flag_name;
 
   /// A set that contains all of the argument that we request from the
   /// specializer not to specialize.
@@ -360,6 +362,10 @@ public:
   void setIRFunction(const IRFunction *F) { F_ = F; }
   /// Set output directory for bundles, debug info files, etc.
   void setOutputDir(llvm::StringRef outputDir) { outputDir_ = outputDir; }
+  /// set flag name for global variable to stop inference
+  void setContinueExecutionFlagName(std::string continue_execution_flag_name);
+  /// get flag name for global variable to stop inference
+  std::string getContinueExecutionFlagName();
   /// Get output directory for bundles, debug info files, etc.
   llvm::StringRef getOutputDir() const { return outputDir_; }
   /// Emit the array of constant offsets as provided by the \p allocationsInfo.

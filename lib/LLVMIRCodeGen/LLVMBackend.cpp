@@ -121,6 +121,15 @@ LLVMBackend::compileIRWithoutConstants(IRFunction *IR) const {
   irgen->initTargetMachine(getOptions());
   irgen->initCodeGen();
   irgen->setIRFunction(IR);
+
+  // Set the flag name to stop the inference
+  // the flag name is derived from the function prefix which
+  // corresponds to the module name
+  std::string function_name = IR->getGraph()->getName();
+  int found = function_name.find_last_of("_");
+  std::string module_name = function_name.substr(0,found);
+  std::string continue_execution_flag_name = "global_" + module_name + "_continue";
+  irgen->setContinueExecutionFlagName(continue_execution_flag_name);
   // Perform the address assignment for activations and WeightVars.
   allocateJITMemory(IR, irgen->getAllocationsInfo());
   // Emit the code for the body of the entry function.

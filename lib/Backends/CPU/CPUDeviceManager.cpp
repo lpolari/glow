@@ -46,6 +46,11 @@ uint64_t CPUDeviceManager::getAvailableMemory() const {
   return maxMemoryBytes_ - usedMemoryBytes_;
 }
 
+std::vector<uint64_t>
+    CPUDeviceManager::getAvailableLoadPerTimeslot(uint64_t p) const {
+      return availableLoadPerTimeslot.at(p);
+}
+
 bool CPUDeviceManager::isMemoryAvailable(uint64_t estimate) const {
   // No fuzz factor for the CPU device.
   return maxMemoryBytes_ >= (usedMemoryBytes_ + estimate);
@@ -69,8 +74,24 @@ void CPUDeviceManager::addNetworkImpl(const Module *module,
 
   uint64_t allFunctionsMemoryBytes{0};
 
+  std::string continue_execution_flag_name = "";
+
   // First check for uniqueness of the function name.
   for (const auto &func : functions) {
+
+    if (continue_execution_flag_name == ""){
+      // Set the flag name to stop the inference
+      // the flag name is derived from the function prefix which
+      // corresponds to the module name
+      std::string function_name = func.first;
+      int found = function_name.find_last_of("_");
+      std::string module_name = function_name.substr(0,found);
+      std::string continue_execution_flag_name = "global_" + module_name
+                                                 + "_continue";
+      llvm::sys::DynamicLibrary::AddSymbol(continue_execution_flag_name,
+                                           &this->continue_execution);
+    }
+
     if (functions_.count(func.first) != 0) {
       readyCB(
           module,
@@ -91,6 +112,15 @@ void CPUDeviceManager::addNetworkImpl(const Module *module,
                   func.first)
                   .str()));
       return;
+    }
+
+
+    for (uint64_t offset : func.second->getTimeslotOffsets()){
+      this->availableLoadPerTimeslot.at(90)[offset] -= func.second->getWCET90();
+      this->availableLoadPerTimeslot.at(95)[offset] -= func.second->getWCET95();
+      this->availableLoadPerTimeslot.at(100)[offset] -= func.second->getWCET100();
+      this->availableLoadPerTimeslot.at(105)[offset] -= func.second->getWCET105();
+      this->availableLoadPerTimeslot.at(110)[offset] -= func.second->getWCET110();
     }
 
     allFunctionsMemoryBytes +=
@@ -148,11 +178,37 @@ void CPUDeviceManager::runFunctionImpl(
     std::unique_ptr<ExecutionContext> context, ResultCBTy resultCB) {
   DCHECK(resultCB != nullptr);
 
+
+  std::size_t found = function.find("_");
+  std::string net_name = function.substr(0, found);
+  std::string name = "DeviceManager::run(" + function + ")";
   TRACE_EVENT_SCOPE_NAMED(context->getTraceContext(), TraceLevel::RUNTIME,
-                          "DeviceManager::run", dmRun);
+                          name, dmRun);
   if (context->getTraceContext()) {
     context->getTraceContext()->setThreadName("CPU DeviceManager");
   }
+
+  if (this->continue_execution == 0) {
+    int queueSize = this->workThread_.getQueueEmpty();
+    if (!queueSize){
+      LOG(INFO) << "%% Queue is Empty -> Set to one again " << queueSize;
+      this->continue_execution = 1;
+    } else {
+      LOG(INFO) << "%% Queue is Not EMTPY -> reset continue flag later "
+                << queueSize;
+    }
+
+    dmRun.addArg("reason", "Deadline already reached before start");
+    TRACE_EVENT_SCOPE_END_NAMED(dmRun);
+    resultCB(id,
+             MAKE_ERR(ErrorValue::ErrorCode::RUNTIME_EXECUTION_TIMEOUT,
+                      llvm::formatv(
+                          "Deadline for {0} already reached before start",
+                          function).str()),
+             std::move(context));
+    return;
+  }
+
   auto funcIt = functions_.find(function);
   if (funcIt == functions_.end()) {
     dmRun.addArg("reason", "function not found");
@@ -168,6 +224,23 @@ void CPUDeviceManager::runFunctionImpl(
 
   // Run that function.
   auto executeErr = func->execute(context.get());
+
+  // If the timeout for the frame has been reached, we have to reset continue
+  // execution for the next frame; But not if there are still subnets
+  // from this frame left. These will stop immediately and reset the value
+  // later
+  int queueSize = this->workThread_.getQueueEmpty();
+  if (!queueSize){
+    LOG(INFO) << "%% Queue is Empty -> Set to one again " << queueSize;
+    this->reset_continue_execution_flag = 1;
+  } else {
+    LOG(INFO) << "%% Queue is Not EMTPY -> Reset continue flag later "
+              << queueSize;
+  }
+
+  if(executeErr){
+    dmRun.addArg("reason", "Deadline reached during execution");
+  }
 
   // End the TraceEvent early to avoid time in the CB.
   TRACE_EVENT_SCOPE_END_NAMED(dmRun);

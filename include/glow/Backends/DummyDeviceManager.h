@@ -43,6 +43,13 @@ public:
   uint64_t getAvailableMemory() const override {
     return std::numeric_limits<uint64_t>::max();
   }
+
+  std::vector<uint64_t> getAvailableLoadPerTimeslot(uint64_t p) const override{
+    /// dummy implementation
+    /// not yet supported for adas-dnnr
+    return {};
+  }
+
   bool isMemoryAvailable(uint64_t) const override { return true; }
 
   /// Load the provided module into the device, readyCB will be called when
@@ -88,6 +95,7 @@ public:
   /// output tensors filled, and any generated TraceEvents.
   RunIdentifierTy runFunction(std::string functionName,
                               std::unique_ptr<ExecutionContext> context,
+                              TimeslotBarrier* timeslotBarrier,
                               ResultCBTy callback) override {
     auto funcIt = functions_.find(functionName);
     if (funcIt == functions_.end()) {

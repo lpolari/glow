@@ -104,6 +104,32 @@ Error HostManager::stopDeviceTrace() {
   return Error::success();
 }
 
+std::vector<TimeslotBarrier*> *setupTimeslotBarriers(){
+  std::vector<TimeslotBarrier*> *timeslotBarriers = new std::vector<TimeslotBarrier*>() ;
+  // GLOBALPERIODMARKER
+  timeslotBarriers->reserve(4);
+  for (int i=0; i<4; ++i){
+    TimeslotBarrier *timeslotBarrier = new TimeslotBarrier();
+    timeslotBarrier->setFramenumber(i);
+
+    // Add one for the actual frame arriving
+    timeslotBarrier->increment(1);
+
+    // Add one for each critical network
+    timeslotBarrier->increment(2);
+
+    // Add one for each network except for the first timeslot
+    // since we wait for all networks of the previous timeslot
+    // to finish before entering the next one
+    if (i>0){
+      timeslotBarrier->increment(4);
+    }
+    timeslotBarriers->push_back(timeslotBarrier);
+  }
+
+  return timeslotBarriers;
+}
+
 Error HostManager::init(std::vector<std::unique_ptr<DeviceConfig>> configs) {
   DeviceIDTy deviceCount = 0;
 
@@ -122,7 +148,7 @@ Error HostManager::init(std::vector<std::unique_ptr<DeviceConfig>> configs) {
   }
   provisioner_.reset(new Provisioner(devices_));
   executor_.reset(
-      new ThreadPoolExecutor(devices_, config_.executorThreads, "HostManager"));
+      new ThreadPoolExecutor(devices_, config_.executorThreads, "HostManager", setupTimeslotBarriers()));
   exportMemoryCounters();
   return Error::success();
 }
@@ -587,7 +613,7 @@ runtime::generateDeviceConfigs(unsigned int numDevices,
     // configs.
     for (unsigned int i = 0; i < numDevices; ++i) {
       auto config = glow::make_unique<runtime::DeviceConfig>(backendName);
-      config->setDeviceMemory(memSize);
+      config->setDeviceMemory(40000000);
       config->deviceID = i;
       configs.push_back(std::move(config));
     }

@@ -165,7 +165,7 @@ namespace detail {
 #ifdef NDEBUG
 static constexpr bool enableCheckingErrors = false;
 #else
-static constexpr bool enableCheckingErrors = true;
+static constexpr bool enableCheckingErrors = false;
 #endif
 
 /// Is true_type only if applied to Error or a descendant.
@@ -299,6 +299,10 @@ public:
     COMPILE_UNSUPPORTED_IR_AFTER_GENERATE,
     // Compilation error; IR unsupported after optimization.
     COMPILE_UNSUPPORTED_IR_AFTER_OPTIMIZE,
+    // Runtime error execution timeout
+    RUNTIME_EXECUTION_TIMEOUT,
+    // Runtime error execution timeout
+    PROVISIONER_TIMESLOT_EXCEEDANCE
   };
 
   /// Log to \p os relevant error information including the file name and

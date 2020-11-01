@@ -64,6 +64,64 @@ public:
   /// but not needed for running on the device.
   virtual void freeCompilationResources(){};
 
+  ///  return wcet90 for that function
+  uint64_t getWCET90(){
+      return this->wcet90;
+  };
+
+  ///  return wcet95 for that function
+  uint64_t getWCET95(){
+    return this->wcet95;
+  };
+
+  ///  return wcet100 for that function
+  uint64_t getWCET100(){
+    return this->wcet100;
+  }
+
+  ///  return wcet105 for that function
+  uint64_t getWCET105(){
+    return this->wcet105;
+  }
+
+  ///  return wcet110 for that function
+  uint64_t getWCET110(){
+    return this->wcet110;
+  }
+
+  ///  return timeslot offset
+  std::vector<uint64_t> getTimeslotOffsets(){
+    return this->timeslot_offsets;
+  }
+
+  ///  set wcet90 for that function
+  void setWCET90(uint64_t wcet90){
+    this->wcet90 = wcet90;
+  };
+
+  ///  set wcet95 for that function
+  void setWCET95(uint64_t wcet95){
+    this->wcet95 = wcet95;
+  };
+
+  ///  set wcet100 for that function
+  void setWCET100(uint64_t wcet100){
+    this->wcet100 = wcet100;
+  }
+
+  void setWCET105(uint64_t wcet105){
+    this->wcet105 = wcet105;
+  }
+
+  void setWCET110(uint64_t wcet110){
+    this->wcet110 = wcet110;
+  }
+
+  ///  set timeslot offset
+  void setTimeslotOffsets(std::vector<uint64_t> timeslot_offsets){
+    this->timeslot_offsets = timeslot_offsets;
+  }
+
 protected:
   /// Contains symbol offsets and allocation sizes.
   runtime::RuntimeBundle runtimeBundle_;
@@ -71,6 +129,14 @@ protected:
   /// Information regarding runtime trace instrumentation present in this
   /// function.
   TraceInfo traceInfo_;
+
+  uint64_t wcet90;
+  uint64_t wcet95;
+  uint64_t wcet100;
+  uint64_t wcet105;
+  uint64_t wcet110;
+
+  std::vector<uint64_t> timeslot_offsets;
 };
 } // end namespace glow
 

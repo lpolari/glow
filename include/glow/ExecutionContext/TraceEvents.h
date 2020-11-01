@@ -229,6 +229,9 @@ public:
   /// optionally with a provided \p processName.
   void dump(llvm::StringRef filename, const std::string &processName = "");
 
+  /// Calculate and return the cpu utilization of the Trace
+  size_t getCPUUtilization();
+
   /// Moves all TraceEvents and thread names in \p other into this context.
   /// This will clear in the input TraceContext.
   void merge(TraceContext *other);

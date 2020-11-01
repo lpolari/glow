@@ -18,11 +18,18 @@
 
 #include "glow/ExecutionContext/TraceEvents.h"
 #include "glow/Graph/PlaceholderBindings.h"
+#include <chrono>
 
 #include "llvm/ADT/STLExtras.h"
 
+using namespace std::literals;
+using namespace std::chrono;
+using clock_type = std::chrono::high_resolution_clock;
+
 namespace glow {
+
 namespace runtime {
+
 class DeviceManager;
 }
 
@@ -56,6 +63,15 @@ class ExecutionContext {
   std::unique_ptr<TraceContext> traceContext_;
 
   /// Trace Events recorded during this run.
+
+  //  Runtime Scheduling Information
+  unsigned offset;
+  unsigned period;
+  unsigned criticality;
+  time_point<clock_type, milliseconds> nextDeadline;
+
+  /// network / module name
+  std::string name;
 
 public:
   ExecutionContext()
@@ -154,6 +170,47 @@ public:
       traceContext->logTraceEvent(name, level, type, std::move(args));
     }
   }
+
+  void setPeriod(unsigned period){
+    this->period = period;
+  }
+
+  unsigned getPeriod(){
+    return this->period;
+  }
+
+  void setOffset(unsigned offset){
+    this->offset = offset;
+  }
+
+  unsigned getOffset(){
+    return this->offset;
+  }
+
+  void setCriticality(unsigned criticality){
+    this->criticality = criticality;
+  }
+
+  unsigned getCriticality(){
+    return this->criticality;
+  }
+
+  void setName(std::string name){
+    this->name = name;
+  }
+
+  std::string getName(){
+    return this->name;
+  }
+
+  void setNextDeadline(time_point<clock_type, milliseconds> nextDeadline){
+    this->nextDeadline = nextDeadline;
+  }
+
+  time_point<clock_type, milliseconds> getNextDeadline(){
+    return this->nextDeadline;
+  }
+
 };
 
 } // namespace glow

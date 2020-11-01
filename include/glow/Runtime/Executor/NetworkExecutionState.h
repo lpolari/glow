@@ -75,6 +75,18 @@ public:
   /// Move all events from the provided vector into the top level resultContxt.
   void insertIntoTraceContext(TraceContext *runCtx);
 
+  TimeslotBarrier *getTimeslotBarrier(const DAGNode *node);
+
+  TimeslotBarrier *getNextTimeslotBarrier(const DAGNode *node);
+
+  void setTimeslotBarriers(const std::vector<TimeslotBarrier*> *timeslotBarriers);
+
+  void setNodeOffset(const DAGNode *node, unsigned offset);
+
+  void shiftTimeslotBarriers();
+
+  void setPeriod(size_t period);
+
   /// \returns a unique pointer to the result bindings. This should not be
   /// called at the same time as getRawResultPlaceholderBindingsPtr() or
   /// insertIntoResultCtx().
@@ -131,6 +143,16 @@ private:
   /// free buffers.
   std::unordered_map<void *, DeviceManager *> deviceAllocations_;
 
+  // TimeslotBarrier* singleFrameReady;
+  const std::vector<TimeslotBarrier *> *timeslotBarriers;
+
+  // offset of a node's run.
+  std::map<const DAGNode*, unsigned> nodeOffsets;
+
+  // Period for the whole network (and therefor each node).
+  unsigned period;
+
+private:
   /// Map of intermediate placeholder bindings that need to be pointed at
   /// resultCtx tensors.
   std::unordered_map<Placeholder *, std::vector<PlaceholderBindings *>>

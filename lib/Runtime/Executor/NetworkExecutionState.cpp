@@ -39,7 +39,7 @@ NetworkExecutionState::~NetworkExecutionState() {
 
 void NetworkExecutionState::bind(std::unique_ptr<ExecutionContext> resultCtx,
                                  ResultCBTy cb, RunIdentifierTy runId) {
-  resultCtx_ = std::move(resultCtx);
+resultCtx_ = std::move(resultCtx);
   cb_ = std::move(cb);
   runId_ = runId;
   // Reset execution state, inflight nodes, parents done, etc.
@@ -81,7 +81,7 @@ void NetworkExecutionState::bind(std::unique_ptr<ExecutionContext> resultCtx,
 void NetworkExecutionState::init(
     const DeviceManagerMapTy &devices,
     std::unordered_map<DAGNode *, DeviceIDTy> &staticAssignment) {
-  // Create a queue for the breadth-first traversal through the graph.
+// Create a queue for the breadth-first traversal through the graph.
   std::queue<DAGNode *> bfsQueue;
   // Marking the default err as checked so we don't get an unchecked error in
   // destructor if we never use this state.
@@ -182,7 +182,7 @@ void NetworkExecutionState::init(
 
 std::unique_ptr<ExecutionContext>
 NetworkExecutionState::getUniqueNodeContextPtr(const DAGNode *node) {
-  // The input PlaceholderBindings for the node should have been created in
+// The input PlaceholderBindings for the node should have been created in
   // the constructor.
   auto ctxIt = intermediateContexts_.find(node);
 
@@ -194,11 +194,11 @@ NetworkExecutionState::getUniqueNodeContextPtr(const DAGNode *node) {
 
 void NetworkExecutionState::returnUniqueNodeContextPtr(
     const DAGNode *node, std::unique_ptr<ExecutionContext> ctx) {
-  intermediateContexts_[node] = std::move(ctx);
+intermediateContexts_[node] = std::move(ctx);
 }
 
 void NetworkExecutionState::incrementInflightNodes(unsigned increment) {
-  inflightNodes_ += increment;
+inflightNodes_ += increment;
 }
 
 bool NetworkExecutionState::decrementInflightNodes(unsigned decrement) {
@@ -217,7 +217,7 @@ bool NetworkExecutionState::decrementInflightNodes(unsigned decrement) {
 
 bool NetworkExecutionState::incrementNodeParentsDone(const DAGNode *node,
                                                      unsigned increment) {
-  // Get the parents done counter for the node. It should have
+// Get the parents done counter for the node. It should have
   // been created in the constructor.
   auto it = nodeParentsDone_.find(node);
 
@@ -240,23 +240,53 @@ bool NetworkExecutionState::incrementNodeParentsDone(const DAGNode *node,
 }
 
 void NetworkExecutionState::insertIntoTraceContext(TraceContext *runCtx) {
-  if (!resultCtx_->getTraceContext()) {
+if (!resultCtx_->getTraceContext()) {
     return;
   }
 
   resultCtx_->getTraceContext()->merge(runCtx);
 }
 
+TimeslotBarrier *NetworkExecutionState::getTimeslotBarrier(const DAGNode *node){
+  return timeslotBarriers->at(nodeOffsets.at(node));
+}
+
+TimeslotBarrier *NetworkExecutionState::getNextTimeslotBarrier(const DAGNode *node){
+  return timeslotBarriers->at((nodeOffsets.at(node) + 1) % 4);
+}
+
+void NetworkExecutionState::setTimeslotBarriers(const std::vector<TimeslotBarrier*> *timeslotBarriers){
+this->timeslotBarriers = timeslotBarriers;
+}
+
+void NetworkExecutionState::setNodeOffset(const DAGNode *node, unsigned offset){
+if (nodeOffsets.count(node)){
+    nodeOffsets.at(node) = offset;
+  } else {
+    nodeOffsets.insert({node, offset});
+  }
+}
+
+void NetworkExecutionState::shiftTimeslotBarriers(){
+  for ( const auto &p : this->nodeOffsets){
+    this->nodeOffsets.at(p.first) = (p.second + 1) % 4;  // LPolariToDo Global Period
+  }
+}
+
+void NetworkExecutionState::setPeriod(size_t period){
+this->period = period;
+}
+
 std::unique_ptr<ExecutionContext>
 NetworkExecutionState::getUniqueResultContextPtr() {
-  // The result PlaceholderBindings should have been been created in the
+// The result PlaceholderBindings should have been been created in the
   // constructor.
   DCHECK_NOTNULL(resultCtx_.get());
   return std::move(resultCtx_);
 }
 
 ExecutionContext *NetworkExecutionState::getRawResultContextPtr() const {
-  // The result PlaceholderBindings should have been been created in the
+// The result PlaceholderBindings should have been been created in the
   // constructor and should not yet have been moved out if this function is
   // being called.
   DCHECK_NOTNULL(resultCtx_.get());

@@ -118,16 +118,38 @@ Error LLVMCompiledFunction::execute(ExecutionContext *context) {
     }
   }
   using JitFuncType =
-      void (*)(uint8_t * constantWeightVars, uint8_t * mutableWeightVars,
+      int64_t (*)(uint8_t * constantWeightVars, uint8_t * mutableWeightVars,
                uint8_t * activations);
   if (address) {
     JitFuncType funcPtr = reinterpret_cast<JitFuncType>(address.get());
     TRACE_EVENT_SCOPE_END_NAMED(fjEvent);
     TRACE_EVENT_SCOPE(traceContext, TraceLevel::RUNTIME, "execute");
-    funcPtr(runtimeBundle_.getConstants(), baseMutableWeightVarsAddress,
+    int64_t res = funcPtr(runtimeBundle_.getConstants(), baseMutableWeightVarsAddress,
             baseActivationsAddress);
+    if (res < 0){
+      LOG(INFO) << "Terminated wit result code " << res;
+    }
   } else {
     RETURN_ERR("Error getting address");
+  }
+
+  std::string module_name = context->getName();
+  std::string continue_execution_flag_name = "global_" + module_name + "_continue";
+  int *continue_execution_ptr = (int*) llvm::sys::DynamicLibrary
+      ::SearchForAddressOfSymbol(continue_execution_flag_name);
+
+  // if the execution has been stopped prematurely free all buffers and
+  // return runtime_execution_timeout immediatly
+  if (*continue_execution_ptr == 0){
+    LOG(INFO) << "[" << module_name << "] Finished subnet execution un-successfully";
+    alignedFree(baseMutableWeightVarsAddress);
+    alignedFree(baseActivationsAddress);
+
+    RETURN_ERR(
+        ErrorValue::ErrorCode::RUNTIME_EXECUTION_TIMEOUT,
+        "Execution of non critical task timed out and was interrupted.");
+  } else {
+    LOG(INFO) << "[" << module_name << "] Finished subnet execution successfully";
   }
 
   {
@@ -135,7 +157,6 @@ Error LLVMCompiledFunction::execute(ExecutionContext *context) {
     updatePlaceholders(context->getPlaceholderBindings(),
                        baseMutableWeightVarsAddress);
   }
-
   {
     TRACE_EVENT_SCOPE(context, TraceLevel::RUNTIME, "freeBuffers");
     alignedFree(baseMutableWeightVarsAddress);

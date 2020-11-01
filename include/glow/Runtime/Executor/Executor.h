@@ -53,6 +53,11 @@ public:
 
   /// Free the context pool for given network.
   virtual void freePool(const DAGNode *root) = 0;
+
+  virtual const std::vector<TimeslotBarrier *> *getTimeslotBarriers() = 0;
+
+  virtual void setTimeslotSize(std::chrono::milliseconds timeslotSize) = 0;
+
 };
 
 } // namespace runtime
