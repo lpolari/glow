@@ -172,6 +172,10 @@ class TraceContext {
   /// Lock around traceEvents_.
   std::mutex lock_;
 
+  /// run_id returned from database as a unique incremented counter for
+  /// each run in the database
+  int run_id;
+
 public:
   TraceContext(int level) : traceLevel_(level) {}
 
@@ -228,6 +232,9 @@ public:
   /// Dumps all TraceEvents in json format to the given \p filename,
   /// optionally with a provided \p processName.
   void dump(llvm::StringRef filename, const std::string &processName = "");
+
+  /// Dumps all TraceEvents in sqlite database
+  void saveToSQLite(std::string network_name);
 
   /// Moves all TraceEvents and thread names in \p other into this context.
   /// This will clear in the input TraceContext.

@@ -9,7 +9,7 @@
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
@@ -23,6 +23,8 @@
 
 #include <atomic>
 #include <fstream>
+#include "sqlite3.h"
+
 
 namespace glow {
 
@@ -197,6 +199,59 @@ void TraceContext::dump(llvm::StringRef filename,
                         const std::string &processName) {
   TraceEvent::dumpTraceEvents(getTraceEvents(), filename,
                               std::move(processName), getThreadNames());
+}
+
+/// Schema of layer-runtime-measurements.db ///
+
+/*
+CREATE TABLE traces(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+run_id INTEGER NOT NULL,
+network_name TEXT NOT NULL,
+node_name TEXT NOT NULL,
+duration INTEGER NOT NULL);
+*/
+
+void TraceContext::saveToSQLite(std::string network_name){
+  sqlite3 *db;
+  char *zErrMsg = 0;
+  int rc;
+
+  rc = sqlite3_open("../data/layer-runtime-measurements.db", &db);
+
+  std::stringstream query;
+  query << "SELECT coalesce(MAX(run_id), 0) FROM traces;";
+
+  int run_id;
+  char ** err = (char**) malloc(100);
+  sqlite3_exec(db, query.str().c_str(), [](void *arg, int count,
+                                  char **data, char **columns) -> int{
+     int* run_id = (int*) arg;
+    *run_id = atoi(*data) + 1;
+  }, (void*) &run_id, NULL);
+
+  std::list<TraceEvent> events = this->getTraceEvents();
+  LOG(INFO) << "SIZE :::: " << events.size() << "\n";
+
+  for (const auto &event : this->getTraceEvents()) {
+    query << "INSERT INTO traces ('run_id', 'network_name', "
+          << "'node_name', 'duration') VALUES "
+          << "('" << run_id << "', '" << network_name << "', '"
+          << event.name << "', '" << event.duration << "');";
+
+    sqlite3_exec(db , query.str().c_str(), NULL , NULL , err);
+    if (sqlite3_errcode(db)){
+      LOG(INFO) << sqlite3_errmsg(db) << "\n";
+    }
+    query.str(std::string());
+  }
+
+  if( rc ) {
+    fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
+  } else {
+    fprintf(stderr, "Opened database successfully\n");
+  }
+  sqlite3_close(db);
 }
 
 void TraceContext::merge(TraceContext *other) {

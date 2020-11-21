@@ -88,6 +88,20 @@ if(GLOW_WITH_CPU)
                           Importer)
   target_include_directories(resnet-runtime PUBLIC ${CMAKE_SOURCE_DIR}/lib)
 
+  add_executable(adas-lrm
+          adas-lrm.cpp)
+  target_link_libraries(adas-lrm
+          PRIVATE
+          Backends
+          ExecutionContext
+          ExecutionEngine
+          HostManager
+          Partitioner
+          Graph
+          Importer
+          sqlite3)
+  target_include_directories(adas-lrm PUBLIC ${CMAKE_SOURCE_DIR}/lib)
+
   add_executable(tracing-compare
                    tracing-compare.cpp)
   target_link_libraries(tracing-compare
